@@ -169,6 +169,8 @@ class ConversationController() {
             messages.add(answer)
             message {
                 answer.content
+            }.options {
+                parseMode = ParseMode.Markdown
             }.send(update.user.id, bot)
             i.addAndGet(1)
             if (i.get() % 50 == 0) {
