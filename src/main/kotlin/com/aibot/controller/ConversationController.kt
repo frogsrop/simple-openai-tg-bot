@@ -47,7 +47,7 @@ class ConversationController() {
     val badNameRe = Regex("[^A-Za-z0-9_-]")
     suspend fun cleanName(name: String): String? {
         return badNameRe.replace(name, "").let { if (it.isEmpty()) return@let null else return@let it }?.let {
-            return@let it.substring(
+            return@let it.substring(0,
                 min(63, it.length)
             )
         }
