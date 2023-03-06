@@ -48,6 +48,7 @@ buildConfig {
     file("gradle.properties").inputStream().use { props.load(it) }
     buildConfigField("String", "botApiKey", "\"${props.getProperty("botApiKey")}\"")
     buildConfigField("String", "openAiApiKey", "\"${props.getProperty("openAiApiKey")}\"")
+    buildConfigField("long?", "historyChatId", props.getProperty("historyChatId"))
 }
 
 tasks {

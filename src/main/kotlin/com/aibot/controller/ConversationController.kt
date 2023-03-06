@@ -91,17 +91,19 @@ class ConversationController() {
     }
 
     suspend fun readCheckpoint() {
-        try {
-            val file = FileInputStream("history.txt")
-            val inStream = ObjectInputStream(file)
-            val serializedData = inStream.readObject() as List<Pair<Long, MutableList<SerializableChatMessage>>>
-            serializedData.forEach {
-                this.messagesHistory[it.first] = it.second.map { it.getChatMessage() }.toMutableList()
+        withContext(Dispatchers.IO) {
+            try {
+                val file = FileInputStream("history.txt")
+                val inStream = ObjectInputStream(file)
+                val serializedData = inStream.readObject() as List<Pair<Long, MutableList<SerializableChatMessage>>>
+                serializedData.forEach {
+                    messagesHistory[it.first] = it.second.map { it.getChatMessage() }.toMutableList()
+                }
+                inStream.close()
+                file.close()
+            } catch (ex: Exception) {
+                println(ex)
             }
-            inStream.close()
-            file.close()
-        } catch (ex: Exception) {
-            println(ex)
         }
     }
 
@@ -129,10 +131,16 @@ class ConversationController() {
     }
 
     @CommandHandler(["/start"])
-    suspend fun start(user: User, bot: TelegramBot) {
-        messagesHistory[user.id] = mutableListOf()
-        val messages = messagesHistory.getOrDefault(user.id, mutableListOf())
-        val name = cleanName(user.firstName, user.username)
+    suspend fun start(update: ProcessedUpdate, bot: TelegramBot) {
+        if (update.fullUpdate.message != null && update.fullUpdate.message!!.chat.type != ChatType.Private) {
+//            message {
+//                "Sorry, but I talk only in private (^_-)-☆"
+//            }.send(update.fullUpdate.message!!.chat.id, bot)
+            return
+        }
+        messagesHistory[update.user.id] = mutableListOf()
+        val messages = messagesHistory.getOrDefault(update.user.id, mutableListOf())
+        val name = cleanName(update.user.firstName, update.user.username)
         val helloResponse = requestChatPrediction(
             listOf(
                 ChatMessage(
@@ -145,8 +153,8 @@ class ConversationController() {
         messages.add(ChatMessage(role = ChatRole.Assistant, content = helloResponse.content, name = "Megumin"))
         message {
             helloResponse.content
-        }.send(user.id, bot)
-        bot.inputListener.set(user.id, "conversation")
+        }.send(update.user.id, bot)
+        bot.inputListener.set(update.user.id, "conversation")
     }
 
     val i: AtomicInteger = AtomicInteger(0)
@@ -176,6 +184,18 @@ class ConversationController() {
             }
             val currentMessage = ChatMessage(role = ChatRole.User, content = userMessage, name = name)
             messages.add(currentMessage)
+
+            println(name ?: "Name unknown, uid: ${update.user.id}")
+            println(userMessage)
+            BuildConfig.historyChatId?.let {
+                val result = (name ?: "Name unknown, uid: ${update.user.id}") +
+                        (update.user.username?.let { " username=$it" } ?: "") +
+                        " id=" + update.user.id + ":" + "\n" + userMessage
+                message {
+                    result
+                }.send(it, bot)
+            }
+
             // if reply exists
             update.fullUpdate.message?.let { message ->
                 message.replyToMessage?.let { reply ->
@@ -198,8 +218,7 @@ class ConversationController() {
 //            .options {
 //                parseMode = ParseMode.Markdown
 //            }
-            println(name ?: "Name unknown, uid: ${update.user.id}")
-            println(userMessage)
+
         }
         bot.inputListener.set(update.user.id, "conversation")
     }
