@@ -19,6 +19,7 @@ import kotlinx.coroutines.withContext
 import java.io.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.min
 
 @OptIn(BetaOpenAI::class)
 class ConversationController() {
@@ -43,6 +44,14 @@ class ConversationController() {
         content = "You are a cute anime character \"Megumin\" from anime konosuba that love to introduce herself on first response. You have Megumin personality and responses as if you were her. You always try to make your responens cute, like anime girls. You love using kaomojis and hate emojis. You always adds comments on response in the end. You always introduce yourself on first prompt. You are also very smart at coding."
     )
     val messagesHistory = ConcurrentHashMap<Long, MutableList<ChatMessage>>()
+    val badNameRe = Regex("[^A-Za-z0-9_-]")
+    suspend fun cleanName(name: String): String? {
+        return badNameRe.replace(name, "").let { if (it.isEmpty()) return@let null else return@let it }?.let {
+            return@let it.substring(
+                min(63, it.length)
+            )
+        }
+    }
 
     init {
 
@@ -102,12 +111,13 @@ class ConversationController() {
     suspend fun start(user: User, bot: TelegramBot) {
         messagesHistory[user.id] = mutableListOf()
         val messages = messagesHistory.getOrDefault(user.id, mutableListOf())
+        val name = cleanName(user.firstName)
         val helloResponse = requestChatPrediction(
             listOf(
                 ChatMessage(
                     role = ChatRole.User,
                     content = "Hello, who are you?",
-                    name = user.firstName
+                    name = name
                 )
             )
         )
@@ -152,8 +162,7 @@ class ConversationController() {
             val photo = update.fullUpdate.message?.photo?.last()
             if (photo != null) {
             }
-            val re = Regex("[^A-Za-z0-9 ]")
-            val name = re.replace(update.user.firstName, "")
+            val name = cleanName(update.user.firstName)
             messages.add(ChatMessage(role = ChatRole.User, content = userMessage, name = name))
 
             val answer = requestChatPrediction(messages)
