@@ -13,23 +13,19 @@ buildscript {
 }
 
 group = "com.aibot"
-version = "0.2.0"
+version = "0.2.1"
 application {
     mainClass.set("com.aibot.ConversationApplicationKt")
 }
 
 repositories {
     mavenCentral()
+    maven(url = "https://jitpack.io")
 }
 dependencies {
-    implementation("eu.vendeli:telegram-bot:2.5.4")
-
-    implementation(group = "org.redisson", name = "redisson", version = "3.19.2") {
-        exclude("com.fasterxml.jackson.core", "jackson-databind")
-    }
+    implementation("io.github.kotlin-telegram-bot.kotlin-telegram-bot:telegram:6.0.7")
     implementation("io.ktor:ktor-client-java:2.2.3")
     implementation("com.aallam.openai:openai-client:3.0.0")
-    implementation("com.fasterxml.jackson.core:jackson-databind:2.14.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:1.6.4")
     implementation("com.google.protobuf:protobuf-javalite:3.21.12")
     implementation("com.google.protobuf:protobuf-kotlin-lite:3.21.12")
