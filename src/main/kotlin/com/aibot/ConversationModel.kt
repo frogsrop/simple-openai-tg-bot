@@ -4,10 +4,12 @@ import com.aallam.openai.api.BetaOpenAI
 import com.aallam.openai.api.chat.ChatCompletionRequest
 import com.aallam.openai.api.chat.ChatMessage
 import com.aallam.openai.api.chat.ChatRole
+import com.aallam.openai.api.exception.OpenAITimeoutException
 import com.aallam.openai.api.http.Timeout
 import com.aallam.openai.api.logging.LogLevel
 import com.aallam.openai.api.logging.Logger
 import com.aallam.openai.api.model.ModelId
+import com.aallam.openai.client.LoggingConfig
 import com.aallam.openai.client.OpenAI
 import com.aallam.openai.client.OpenAIConfig
 import com.aibot.aibot.BuildConfig
@@ -20,21 +22,23 @@ import com.github.kotlintelegrambot.entities.ChatId
 import com.github.kotlintelegrambot.entities.Update
 import com.github.kotlintelegrambot.extensions.filters.Filter
 import kotlinx.coroutines.*
-import java.io.*
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
-import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Duration.Companion.minutes
 
 @OptIn(BetaOpenAI::class, DelicateCoroutinesApi::class)
 class ConversationModel {
 
     private val openAI = OpenAI(
         config = OpenAIConfig(
-            BuildConfig.openAiApiKey, LogLevel.None, logger = Logger.Empty, timeout = Timeout(60.seconds)
+            BuildConfig.openAiApiKey, LoggingConfig(LogLevel.None, logger = Logger.Empty), timeout = Timeout(10.minutes)
         )
     )
 
-    private val id = ModelId("gpt-3.5-turbo")
+    private val premium_id = ModelId("gpt-4")
+    private val default_id = ModelId("gpt-3.5-turbo")
+    private val premium_users = listOf(114765204L, 99064756L, 2107387576L)
+
     private val assistantInitialization = ChatMessage(
         role = ChatRole.System,
         content = """You are about to immerse yourself into the role of a cute anime character "Megumin" from anime konosuba.
@@ -49,6 +53,7 @@ class ConversationModel {
             |You have conscious and experience of Megumin from konosuba. 
             |You always introduce yourself on first response.
             |You are also very smart at coding.""".trimMargin()
+//                content = """You are a coder assistant chat bot. You show the most popular solution for answers, and mentions at least 3 other solutions if exists.""".trimMargin()
     )
     private val badNameRe = Regex("[^A-Za-z0-9_-]")
     private val chatHistoryManager = ChatHistoryManager()
@@ -59,6 +64,13 @@ class ConversationModel {
     }
 
     fun run() {
+        runBlocking {
+            val models = openAI.models()
+            models.forEach {
+                if (it.id.id.contains("gpt"))
+                    println(it)
+            }
+        }
         val bot = bot {
             token = BuildConfig.botApiKey
             dispatch {
@@ -86,18 +98,22 @@ class ConversationModel {
         }
     }
 
-    private suspend fun requestChatPrediction(messages: List<ChatMessage>): ChatMessage {
+    private suspend fun requestChatPrediction(messages: List<ChatMessage>, premium: Boolean): ChatMessage {
         val toSendMessages = messages.takeLast(10).toMutableList()
         toSendMessages.add(0, assistantInitialization)
 
         val completionRequest = ChatCompletionRequest(
-            model = id,
+            model = if (premium) premium_id else default_id,
             messages = toSendMessages,
             temperature = 0.7
         )
+        return try {
+            val completion = openAI.chatCompletion(completionRequest)
+            completion.choices.firstNotNullOf { it.message }
+        } catch (e: OpenAITimeoutException) {
+            ChatMessage(ChatRole.System, "Request timed out. Try sending it again or paraphrase", "System")
+        }
 
-        val completion = openAI.chatCompletion(completionRequest)
-        return completion.choices.firstNotNullOf { it.message }
     }
 
     private suspend fun start(update: Update, bot: Bot) {
@@ -113,11 +129,13 @@ class ConversationModel {
                             content = "Hello, who are you?",
                             name = name
                         )
-                    )
+                    ), from.id in premium_users
                 )
-
                 messages.add(ChatMessage(role = ChatRole.Assistant, content = helloResponse.content, name = "Megumin"))
-                bot.sendMessage(ChatId.fromId(from.id), helloResponse.content)
+                bot.sendMessage(
+                    ChatId.fromId(from.id),
+                    "${helloResponse.content} \nrunning on: ${if (from.id in premium_users) "gpt-4" else "gpt-3.5-turbo"}"
+                )
             }
         }
     }
@@ -153,7 +171,8 @@ class ConversationModel {
                 BuildConfig.historyChatId?.let {
                     val result = (name ?: "Name unknown, uid: ${from.id}") +
                             (from.username?.let { " username=$it" } ?: "") +
-                            " id=" + from.id + ":" + "\n" + userMessage
+                            " id=" + from.id + ":"
+//                    + "\n" + userMessage
                     bot.sendMessage(ChatId.fromId(it), result)
                 }
 
@@ -164,13 +183,13 @@ class ConversationModel {
                     val rText = ((reply.caption ?: "") + " " + (reply.text ?: "")).trim()
                     val replyChatMessage = ChatMessage(role = rRole, content = rText, name = rName)
                     val replyChat = listOf(assistantInitialization, replyChatMessage, currentMessage)
-                    val answer = requestChatPrediction(replyChat)
+                    val answer = requestChatPrediction(replyChat, from.id in premium_users)
                     messages.add(answer)
                     bot.sendMessage(ChatId.fromId(from.id), answer.content)
                     return@conversation
                 }
 
-                val answer = requestChatPrediction(messages)
+                val answer = requestChatPrediction(messages, from.id in premium_users)
                 messages.add(answer)
                 bot.sendMessage(ChatId.fromId(from.id), answer.content)
 //            .options {

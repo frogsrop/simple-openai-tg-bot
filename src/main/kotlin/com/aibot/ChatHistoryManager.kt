@@ -76,7 +76,7 @@ class ChatHistoryManager {
                 inStream.close()
                 file.close()
             } catch (ex: Exception) {
-                println(ex)
+                println("skippgin with exception:$ex")
             }
         }
     }

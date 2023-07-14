@@ -13,7 +13,7 @@ buildscript {
 }
 
 group = "com.aibot"
-version = "0.2.1"
+version = "0.2.4"
 application {
     mainClass.set("com.aibot.ConversationApplicationKt")
 }
@@ -25,7 +25,7 @@ repositories {
 dependencies {
     implementation("io.github.kotlin-telegram-bot.kotlin-telegram-bot:telegram:6.0.7")
     implementation("io.ktor:ktor-client-java:2.2.3")
-    implementation("com.aallam.openai:openai-client:3.0.0")
+    implementation("com.aallam.openai:openai-client:3.2.5")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:1.6.4")
     implementation("com.google.protobuf:protobuf-javalite:3.21.12")
     implementation("com.google.protobuf:protobuf-kotlin-lite:3.21.12")
