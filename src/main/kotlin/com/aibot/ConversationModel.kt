@@ -52,7 +52,8 @@ class ConversationModel {
             180096477L,
             215930580L,
             1867042039L,
-            251400536L
+            251400536L,
+            6743863631L
         )
     private val inline_question = HashMap<Long, Pair<String, String>>()
     private val assistantInitialization = ChatMessage(
