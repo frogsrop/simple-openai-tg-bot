@@ -9,7 +9,7 @@ fun main(args: Array<String>) {
     runBlocking {
         println("Reading")
         manager.readCheckpoint()
-        val res = manager.get(5721158050)
+        val res = manager.get(2030771392)
         res.forEach{
             println("${it.name ?: "Megumin"}: ${it.content}")
         }

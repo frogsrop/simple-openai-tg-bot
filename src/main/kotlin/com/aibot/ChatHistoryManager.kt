@@ -37,7 +37,7 @@ class ChatHistoryManager {
         Serializable {
         constructor(chatMessage: ChatMessage) : this(
             role = chatMessage.role,
-            content = chatMessage.content,
+            content = chatMessage.content ?: "",
             name = chatMessage.name
         ) {
         }
