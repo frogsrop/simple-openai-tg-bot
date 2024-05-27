@@ -28,7 +28,9 @@ import com.github.kotlintelegrambot.extensions.filters.Filter
 import kotlinx.coroutines.*
 import kotlin.time.Duration.Companion.minutes
 
-class ConversationModel {
+class ConversationModel(
+    private val chatHistoryManager: ChatHistoryManager
+) {
     private val botContext = MainScope()
     private val openAI = OpenAI(
         config = OpenAIConfig(
@@ -97,7 +99,6 @@ class ConversationModel {
     )
 
     private val badNameRe = Regex("[^A-Za-z0-9_-]")
-    private val chatHistoryManager: SqlChatHistoryManager = SqlChatHistoryManager.build()
 
     init { }
 
@@ -237,7 +238,6 @@ class ConversationModel {
         update.message?.let { message ->
             message.from?.let { from ->
                 val name = cleanName(from.firstName, from.username)
-                chatHistoryManager.addUser(User(from.id, name))
                 val helloResponse = requestChatPrediction(
                     listOf(
                         ChatMessage(
