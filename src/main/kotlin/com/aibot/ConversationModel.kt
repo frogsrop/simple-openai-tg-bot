@@ -18,28 +18,47 @@ import com.github.kotlintelegrambot.dispatch
 import com.github.kotlintelegrambot.dispatcher.command
 import com.github.kotlintelegrambot.dispatcher.inlineQuery
 import com.github.kotlintelegrambot.dispatcher.message
+import com.github.kotlintelegrambot.entities.BotCommand
 import com.github.kotlintelegrambot.entities.ChatId
+import com.github.kotlintelegrambot.entities.ParseMode
 import com.github.kotlintelegrambot.entities.Update
 import com.github.kotlintelegrambot.entities.inlinequeryresults.InlineQueryResult
 import com.github.kotlintelegrambot.entities.inlinequeryresults.InputMessageContent
 import com.github.kotlintelegrambot.extensions.filters.Filter
 import kotlinx.coroutines.*
-import java.util.concurrent.atomic.AtomicInteger
-import kotlin.math.min
 import kotlin.time.Duration.Companion.minutes
 
 class ConversationModel {
-
+    private val botContext = MainScope()
     private val openAI = OpenAI(
         config = OpenAIConfig(
             BuildConfig.openAiApiKey, LoggingConfig(LogLevel.None, logger = Logger.Empty), timeout = Timeout(10.minutes)
         )
     )
-    private val premium_model = "gpt-4"
-    private val default_model = "gpt-3.5-turbo"
-    private val premium_id = ModelId(default_model)
-    private val default_id = ModelId(default_model)
-    private val inline_question = HashMap<Long, Pair<String, String>>()
+
+    private enum class Model(val id: String, val description: String) {
+        GPT_3_5_TURBO("gpt-3.5-turbo", """GPT-3.5 Turbo models can understand and generate natural language or code. Returns a maximum of 4,096 output tokens."""),
+        GPT_4("gpt-4", """GPT-4 is a large multimodal model (accepting text or image inputs and outputting text) that can solve difficult problems with greater accuracy than any of our previous models, thanks to its broader general knowledge and advanced reasoning capabilities."""),
+        GPT_4_TURBO("gpt-4-turbo","""GPT-4 Turbo with Vision. The latest GPT-4 Turbo model with vision capabilities."""),
+        GPT_4o("gpt-4o", """GPT-4o (“o” for “omni”) is our most advanced model. It is multimodal (accepting text or image inputs and outputting text), and it has the same high intelligence as GPT-4 Turbo but is much more efficient—it generates text 2x faster and is 50% cheaper.""")
+    }
+
+    private val premium_users =
+        listOf(
+            114765204L,
+            99064756L,
+            2107387576L,
+            835713285L,
+            230655321L,
+            607811624L,
+            201213389L,
+            180096477L,
+            215930580L,
+            1867042039L,
+            251400536L,
+            6743863631L
+        )
+    private val inlineQuestion = HashMap<Long, Pair<String, String>>()
     private val assistantInitialization = ChatMessage(
         role = ChatRole.System,
         content = """You are about to immerse yourself into the role of a cute anime character "Megumin" from anime konosuba.
@@ -53,8 +72,13 @@ class ConversationModel {
             |You always adds comments on response in the end. 
             |You have conscious and experience of Megumin from konosuba. 
             |You always introduce yourself on first response.
-            |You are also very smart at coding.""".trimMargin()
-//                content = """You are a coder assistant chat bot. You show the most popular solution for answers, and mentions at least 3 other solutions if exists.""".trimMargin()
+            |You are also very smart at coding.
+            |When you sending code keep code language on same string as `
+            |For example ```python 
+            |def f():
+            |   pass
+            |```
+            |""".trimMargin()
     )
     private val shortAssistantInitialization = ChatMessage(
         role = ChatRole.System,
@@ -70,38 +94,25 @@ class ConversationModel {
             |You have conscious and experience of Megumin from konosuba. 
             |You are also very smart at coding.
             |Laconic answers is your priority use as few words as you can, but try not to loose information""".trimMargin()
-//                content = """You are a coder assistant chat bot. You show the most popular solution for answers, and mentions at least 3 other solutions if exists.""".trimMargin()
     )
+
     private val badNameRe = Regex("[^A-Za-z0-9_-]")
-    private val startCommand = "start"
-    private val sendMessageCommand = "send"
-    private val addPremiumUserCommand = "add_premium"
-    private val removePremiumUserCommand = "remove_premium"
-    private val listPremiumUsersCommand = "list_premium"
-    private val requestCount: AtomicInteger = AtomicInteger(0)
+    private val chatHistoryManager: SqlChatHistoryManager = SqlChatHistoryManager.build()
 
-    private val chatHistoryManager = ChatHistoryManager()
-    private val premiumUsersManager = PremiumUsersManager()
-
-    init {
-        GlobalScope.launch(Dispatchers.IO) {
-            chatHistoryManager.readCheckpoint()
-            premiumUsersManager.readUsers()
-        }
-    }
+    init { }
 
     private suspend fun inlineResponder(bot: Bot) {
-        inline_question.forEach {
-            if (inline_question[it.key]?.first.isNullOrBlank()) {
+        inlineQuestion.forEach {
+            if (inlineQuestion[it.key]?.first.isNullOrBlank()) {
                 return@forEach
             }
             val uid = it.key
-            val data = inline_question[it.key]
-            inline_question[it.key] = "" to (inline_question[it.key]?.second ?: "")
+            val data = inlineQuestion[it.key]
+            inlineQuestion[it.key] = "" to (inlineQuestion[it.key]?.second ?: "")
             val prediction =
                 requestChatPrediction(
                     listOf(ChatMessage(ChatRole.User, data?.first?.trim())),
-                    premiumUsersManager.checkPremium(uid),
+                    uid in premium_users,
                     true
                 )
             val result = listOf(
@@ -120,7 +131,7 @@ class ConversationModel {
                     description = "Response for ${data?.first}: ${prediction.content ?: "_empty_"}",
                 )
             )
-            if (inline_question[it.key]?.second == data?.second && data?.second != null) {
+            if (inlineQuestion[it.key]?.second == data?.second && data?.second != null) {
                 print("Good response: ${data.second}")
                 bot.answerInlineQuery(data.second, result)
             }
@@ -130,6 +141,7 @@ class ConversationModel {
     }
 
     fun run() {
+
         runBlocking {
             val models = openAI.models()
             models.forEach {
@@ -137,59 +149,47 @@ class ConversationModel {
                     println(it)
             }
         }
+
         val bot = bot {
             token = BuildConfig.botApiKey
             dispatch {
-                command(startCommand) {
+                command("start") {
                     if (message.chat.type == "private") {
-                        GlobalScope.launch(Dispatchers.Default) { start(update, bot) }
+                        botContext.launch(Dispatchers.Default) { start(update, bot) }
                     }
                 }
-                command(sendMessageCommand) {
+                command("send") {
                     if (message.chat.type == "private" || message.from?.username == "frogsrop") {
-                        GlobalScope.launch(Dispatchers.Default) { send(update, bot) }
-                    }
-                }
-                command(addPremiumUserCommand) {
-                    if (message.chat.type == "private" || message.from?.username == "frogsrop") {
-                        GlobalScope.launch(Dispatchers.Default) { addPremiumUser(update, bot) }
-                    }
-                }
-                command(removePremiumUserCommand) {
-                    if (message.chat.type == "private" || message.from?.username == "frogsrop") {
-                        GlobalScope.launch(Dispatchers.Default) { removePremiumUser(update, bot) }
-                    }
-                }
-                command(listPremiumUsersCommand) {
-                    if (message.chat.type == "private" || message.from?.username == "frogsrop") {
-                        GlobalScope.launch(Dispatchers.Default) { listPremiumUsers(update, bot) }
+                        botContext.launch(Dispatchers.Default) { send(update, bot) }
                     }
                 }
                 message(Filter.Private and (Filter.Reply or Filter.Text) and !Filter.Command) {
-                    GlobalScope.launch(Dispatchers.Default) { conversation(update, bot) }
+                    botContext.launch(Dispatchers.Default) { conversation(update, bot) }
                 }
                 inlineQuery {
                     val queryText = inlineQuery.query
 
                     if (queryText.isBlank() or queryText.isEmpty()) return@inlineQuery
 
-                    inline_question[inlineQuery.from.id] = Pair(queryText, inlineQuery.id)
+                    inlineQuestion[inlineQuery.from.id] = Pair(queryText, inlineQuery.id)
                 }
             }
         }
-        GlobalScope.launch(Dispatchers.IO) { inlineResponder(bot) }
+
+        val commands = mutableListOf(
+            BotCommand("start", "Start conversation or reset context."),
+            BotCommand("list_models", "Show list of awailable models."),
+            BotCommand("change_model", "Change model.")
+        )
+        print("setMyCommands result: ${bot.setMyCommands(commands)}")
+        botContext.launch(Dispatchers.IO) { inlineResponder(bot) }
         bot.startPolling()
     }
 
-    private fun cleanName(name: String, username: String?): String? {
-        val goodName = badNameRe.replace(name, "").let { if (it.isEmpty()) return@let null else return@let it }
-        val resultingName = goodName ?: username
-        return resultingName?.let {
-            return@let it.substring(
-                0,
-                min(63, it.length)
-            )
-        }
+    private fun cleanName(name: String, username: String?): String {
+        val goodName = badNameRe.replace(name, "").trim()
+        val resultingName = goodName.ifBlank { username }
+        return resultingName ?: ""
     }
 
     private suspend fun requestChatPrediction(
@@ -204,7 +204,7 @@ class ConversationModel {
         toSendMessages.add(0, if (short) shortAssistantInitialization else assistantInitialization)
 
         val completionRequest = ChatCompletionRequest(
-            model = default_id,
+            model = ModelId(Model.GPT_3_5_TURBO.id),
             messages = toSendMessages,
             temperature = 0.7
         )
@@ -220,7 +220,7 @@ class ConversationModel {
     private suspend fun send(update: Update, bot: Bot) {
         update.message?.let { message ->
             message.text?.let { rawText ->
-                val content = rawText.substring(sendMessageCommand.length + 1).trim()
+                val content = rawText.substring("/send".length).trim()
                 val idx = content.indexOf(' ')
                 val id = content.substring(0, idx).trim()
                 val text = content.substring(idx).trim()
@@ -236,69 +236,21 @@ class ConversationModel {
     private suspend fun start(update: Update, bot: Bot) {
         update.message?.let { message ->
             message.from?.let { from ->
-                chatHistoryManager.set(from.id, mutableListOf())
-                val messages = chatHistoryManager.get(from.id)
                 val name = cleanName(from.firstName, from.username)
+                chatHistoryManager.addUser(User(from.id, name))
                 val helloResponse = requestChatPrediction(
                     listOf(
                         ChatMessage(
                             role = ChatRole.User,
                             content = "Hello, who are you?",
-                            name = name
+                            name = name.ifEmpty { null }
                         )
-                    ), premiumUsersManager.checkPremium(from.id)
+                    ), from.id in premium_users
                 )
-                messages.add(ChatMessage(role = ChatRole.Assistant, content = helloResponse.content, name = "Megumin"))
+                chatHistoryManager.addMessage(from.id, ChatMessage(role = ChatRole.Assistant, content = helloResponse.content, name = "Megumin"))
                 bot.sendMessage(
                     ChatId.fromId(from.id),
-                    "${helloResponse.content} \nrunning on: ${if (premiumUsersManager.checkPremium(from.id)) premium_id.id else default_id.id}"
-                )
-            }
-        }
-    }
-
-    private suspend fun addPremiumUser(update: Update, bot: Bot) {
-        update.message?.let { message ->
-            message.text?.let { rawText ->
-                val content = rawText.substring(addPremiumUserCommand.length + 1).trim()
-                val idx = content.indexOf(' ')
-                val userId = content.substring(0, idx).trim().toLong()
-                println("received add premium user request $userId")
-                premiumUsersManager.addUser(userId)
-                bot.sendMessage(
-                    ChatId.fromId(message.from?.id!!),
-                    "user $userId was granted premium"
-                )
-            }
-        }
-    }
-
-    private suspend fun removePremiumUser(update: Update, bot: Bot) {
-        update.message?.let { message ->
-            message.text?.let { rawText ->
-                val content = rawText.substring(removePremiumUserCommand.length + 1).trim()
-                val idx = content.indexOf(' ')
-                val userId = content.substring(0, idx).trim().toLong()
-                println("received remove premium user request $userId")
-                premiumUsersManager.removeUser(userId)
-                bot.sendMessage(
-                    ChatId.fromId(message.from?.id!!),
-                    "removed premium for user $userId"
-                )
-            }
-        }
-    }
-
-    private suspend fun listPremiumUsers(update: Update, bot: Bot) {
-        update.message?.let { message ->
-            message.text?.let {
-                val usersList = premiumUsersManager
-                    .getUsers()
-                    .joinToString("\n")
-
-                bot.sendMessage(
-                    ChatId.fromId(message.from?.id!!),
-                    usersList
+                    "${helloResponse.content} \nrunning on: ${if (from.id in premium_users) ModelId(Model.GPT_3_5_TURBO.id) else ModelId(Model.GPT_3_5_TURBO.id)}"
                 )
             }
         }
@@ -308,7 +260,7 @@ class ConversationModel {
         update.message?.let { message ->
             message.from?.let { from ->
 
-                if (!chatHistoryManager.check(from.id)) {
+                if (!chatHistoryManager.hasUser(from.id)) {
                     bot.sendMessage(
                         ChatId.fromId(from.id),
                         "Try using /start."
@@ -316,24 +268,18 @@ class ConversationModel {
                     return@conversation
                 }
 
-                requestCount.addAndGet(1)
-                if (requestCount.get() % 50 == 0) {
-                    chatHistoryManager.makeCheckpoint()
-                }
-
                 val userMessage = ((message.caption ?: "") + " " + (message.text ?: "")).trim()
                 val name = cleanName(from.firstName, from.username)
-                val messages = chatHistoryManager.get(from.id)
-                if (messages.size > 1000) {
-                    messages.removeFirst()
-                }
-                val currentMessage = ChatMessage(role = ChatRole.User, content = userMessage, name = name)
+                val history = chatHistoryManager.getMessages(from.id)
+                val currentMessage = ChatMessage(role = ChatRole.User, content = userMessage, name = name.ifEmpty { null })
+                chatHistoryManager.addMessage(from.id, currentMessage)
+                val messages = history.takeLast(5).toMutableList()
                 messages.add(currentMessage)
 
-                println(name ?: "Name unknown, uid: ${from.id}")
+                println(name)
                 println(userMessage)
                 BuildConfig.historyChatId?.let {
-                    val result = (name ?: "Name unknown, uid: ${from.id}") +
+                    val result = (name) +
                             (from.username?.let { " username=$it" } ?: "") +
                             " id=" + from.id + ":"
 //                    + "\n" + userMessage
@@ -347,18 +293,17 @@ class ConversationModel {
                     val rText = ((reply.caption ?: "") + " " + (reply.text ?: "")).trim()
                     val replyChatMessage = ChatMessage(role = rRole, content = rText, name = rName)
                     val replyChat = listOf(assistantInitialization, replyChatMessage, currentMessage)
-                    val answer = requestChatPrediction(replyChat, premiumUsersManager.checkPremium(from.id))
+                    val answer = requestChatPrediction(replyChat, from.id in premium_users)
                     messages.add(answer)
+                    chatHistoryManager.addMessage(from.id, answer)
                     bot.sendMessage(ChatId.fromId(from.id), answer.content ?: "")
                     return@conversation
                 }
 
-                val answer = requestChatPrediction(messages, premiumUsersManager.checkPremium(from.id))
+                val answer = requestChatPrediction(messages, from.id in premium_users)
                 messages.add(answer)
-                bot.sendMessage(ChatId.fromId(from.id), answer.content ?: "")
-//            .options {
-//                parseMode = ParseMode.Markdown
-//            }
+                chatHistoryManager.addMessage(from.id, answer)
+                bot.sendMessage(ChatId.fromId(from.id), answer.content ?: "", parseMode = ParseMode.MARKDOWN)
             }
         }
     }
