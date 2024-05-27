@@ -3,7 +3,7 @@ import org.jetbrains.kotlin.konan.properties.Properties
 
 plugins {
     application
-    kotlin("jvm") version "1.8.0"
+    kotlin("jvm") version "1.9.22"
     id("com.google.protobuf") version "0.8.18"
     kotlin("plugin.serialization") version "1.8.10"
     id("com.github.gmazzo.buildconfig") version "3.1.0"
@@ -13,7 +13,7 @@ buildscript {
 }
 
 group = "com.aibot"
-version = "0.2.10"
+version = "0.3.0"
 application {
     mainClass.set("com.aibot.ConversationApplicationKt")
 }
@@ -23,21 +23,15 @@ repositories {
     maven(url = "https://jitpack.io")
 }
 dependencies {
-    implementation("io.github.kotlin-telegram-bot.kotlin-telegram-bot:telegram:6.0.7")
+    implementation("io.github.kotlin-telegram-bot.kotlin-telegram-bot:telegram:6.1.0")
     implementation("io.ktor:ktor-client-java:2.2.3")
     implementation("com.aallam.openai:openai-client:3.5.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:1.6.4")
     implementation("com.google.protobuf:protobuf-javalite:3.21.12")
     implementation("com.google.protobuf:protobuf-kotlin-lite:3.21.12")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.4.1")
+    implementation("org.xerial:sqlite-jdbc:3.45.3.0")
 }
-
-tasks.withType<KotlinCompile>().all {
-    kotlinOptions {
-        jvmTarget = "11"
-    }
-}
-
 
 buildConfig {
     val props = Properties()
@@ -71,9 +65,9 @@ tasks {
 }
 val compileKotlin: KotlinCompile by tasks
 compileKotlin.kotlinOptions {
-    jvmTarget = "1.8"
+    jvmTarget = "17"
 }
 val compileTestKotlin: KotlinCompile by tasks
 compileTestKotlin.kotlinOptions {
-    jvmTarget = "1.8"
+    jvmTarget = "17"
 }
