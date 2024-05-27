@@ -1,6 +1,5 @@
 package com.aibot
 
-import com.aallam.openai.api.BetaOpenAI
 import com.aallam.openai.api.chat.ChatCompletionRequest
 import com.aallam.openai.api.chat.ChatMessage
 import com.aallam.openai.api.chat.ChatRole
@@ -40,21 +39,6 @@ class ConversationModel {
     private val default_model = "gpt-3.5-turbo"
     private val premium_id = ModelId(default_model)
     private val default_id = ModelId(default_model)
-    private val premium_users =
-        listOf(
-            114765204L,
-            99064756L,
-            2107387576L,
-            835713285L,
-            230655321L,
-            607811624L,
-            201213389L,
-            180096477L,
-            215930580L,
-            1867042039L,
-            251400536L,
-            6743863631L
-        )
     private val inline_question = HashMap<Long, Pair<String, String>>()
     private val assistantInitialization = ChatMessage(
         role = ChatRole.System,
@@ -89,11 +73,21 @@ class ConversationModel {
 //                content = """You are a coder assistant chat bot. You show the most popular solution for answers, and mentions at least 3 other solutions if exists.""".trimMargin()
     )
     private val badNameRe = Regex("[^A-Za-z0-9_-]")
-    private val chatHistoryManager = ChatHistoryManager()
+    private val startCommand = "start"
+    private val sendMessageCommand = "send"
+    private val addPremiumUserCommand = "add_premium"
+    private val removePremiumUserCommand = "remove_premium"
+    private val listPremiumUsersCommand = "list_premium"
     private val requestCount: AtomicInteger = AtomicInteger(0)
 
+    private val chatHistoryManager = ChatHistoryManager()
+    private val premiumUsersManager = PremiumUsersManager()
+
     init {
-        GlobalScope.launch(Dispatchers.IO) { chatHistoryManager.readCheckpoint() }
+        GlobalScope.launch(Dispatchers.IO) {
+            chatHistoryManager.readCheckpoint()
+            premiumUsersManager.readUsers()
+        }
     }
 
     private suspend fun inlineResponder(bot: Bot) {
@@ -107,7 +101,7 @@ class ConversationModel {
             val prediction =
                 requestChatPrediction(
                     listOf(ChatMessage(ChatRole.User, data?.first?.trim())),
-                    uid in premium_users,
+                    premiumUsersManager.checkPremium(uid),
                     true
                 )
             val result = listOf(
@@ -146,14 +140,29 @@ class ConversationModel {
         val bot = bot {
             token = BuildConfig.botApiKey
             dispatch {
-                command("start") {
+                command(startCommand) {
                     if (message.chat.type == "private") {
                         GlobalScope.launch(Dispatchers.Default) { start(update, bot) }
                     }
                 }
-                command("send") {
+                command(sendMessageCommand) {
                     if (message.chat.type == "private" || message.from?.username == "frogsrop") {
                         GlobalScope.launch(Dispatchers.Default) { send(update, bot) }
+                    }
+                }
+                command(addPremiumUserCommand) {
+                    if (message.chat.type == "private" || message.from?.username == "frogsrop") {
+                        GlobalScope.launch(Dispatchers.Default) { addPremiumUser(update, bot) }
+                    }
+                }
+                command(removePremiumUserCommand) {
+                    if (message.chat.type == "private" || message.from?.username == "frogsrop") {
+                        GlobalScope.launch(Dispatchers.Default) { removePremiumUser(update, bot) }
+                    }
+                }
+                command(listPremiumUsersCommand) {
+                    if (message.chat.type == "private" || message.from?.username == "frogsrop") {
+                        GlobalScope.launch(Dispatchers.Default) { listPremiumUsers(update, bot) }
                     }
                 }
                 message(Filter.Private and (Filter.Reply or Filter.Text) and !Filter.Command) {
@@ -211,7 +220,7 @@ class ConversationModel {
     private suspend fun send(update: Update, bot: Bot) {
         update.message?.let { message ->
             message.text?.let { rawText ->
-                val content = rawText.substring("/send".length).trim()
+                val content = rawText.substring(sendMessageCommand.length + 1).trim()
                 val idx = content.indexOf(' ')
                 val id = content.substring(0, idx).trim()
                 val text = content.substring(idx).trim()
@@ -237,12 +246,59 @@ class ConversationModel {
                             content = "Hello, who are you?",
                             name = name
                         )
-                    ), from.id in premium_users
+                    ), premiumUsersManager.checkPremium(from.id)
                 )
                 messages.add(ChatMessage(role = ChatRole.Assistant, content = helloResponse.content, name = "Megumin"))
                 bot.sendMessage(
                     ChatId.fromId(from.id),
-                    "${helloResponse.content} \nrunning on: ${if (from.id in premium_users) premium_id.id else default_id.id}"
+                    "${helloResponse.content} \nrunning on: ${if (premiumUsersManager.checkPremium(from.id)) premium_id.id else default_id.id}"
+                )
+            }
+        }
+    }
+
+    private suspend fun addPremiumUser(update: Update, bot: Bot) {
+        update.message?.let { message ->
+            message.text?.let { rawText ->
+                val content = rawText.substring(addPremiumUserCommand.length + 1).trim()
+                val idx = content.indexOf(' ')
+                val userId = content.substring(0, idx).trim().toLong()
+                println("received add premium user request $userId")
+                premiumUsersManager.addUser(userId)
+                bot.sendMessage(
+                    ChatId.fromId(message.from?.id!!),
+                    "user $userId was granted premium"
+                )
+            }
+        }
+    }
+
+    private suspend fun removePremiumUser(update: Update, bot: Bot) {
+        update.message?.let { message ->
+            message.text?.let { rawText ->
+                val content = rawText.substring(removePremiumUserCommand.length + 1).trim()
+                val idx = content.indexOf(' ')
+                val userId = content.substring(0, idx).trim().toLong()
+                println("received remove premium user request $userId")
+                premiumUsersManager.removeUser(userId)
+                bot.sendMessage(
+                    ChatId.fromId(message.from?.id!!),
+                    "removed premium for user $userId"
+                )
+            }
+        }
+    }
+
+    private suspend fun listPremiumUsers(update: Update, bot: Bot) {
+        update.message?.let { message ->
+            message.text?.let {
+                val usersList = premiumUsersManager
+                    .getUsers()
+                    .joinToString("\n")
+
+                bot.sendMessage(
+                    ChatId.fromId(message.from?.id!!),
+                    usersList
                 )
             }
         }
@@ -291,13 +347,13 @@ class ConversationModel {
                     val rText = ((reply.caption ?: "") + " " + (reply.text ?: "")).trim()
                     val replyChatMessage = ChatMessage(role = rRole, content = rText, name = rName)
                     val replyChat = listOf(assistantInitialization, replyChatMessage, currentMessage)
-                    val answer = requestChatPrediction(replyChat, from.id in premium_users)
+                    val answer = requestChatPrediction(replyChat, premiumUsersManager.checkPremium(from.id))
                     messages.add(answer)
                     bot.sendMessage(ChatId.fromId(from.id), answer.content ?: "")
                     return@conversation
                 }
 
-                val answer = requestChatPrediction(messages, from.id in premium_users)
+                val answer = requestChatPrediction(messages, premiumUsersManager.checkPremium(from.id))
                 messages.add(answer)
                 bot.sendMessage(ChatId.fromId(from.id), answer.content ?: "")
 //            .options {
