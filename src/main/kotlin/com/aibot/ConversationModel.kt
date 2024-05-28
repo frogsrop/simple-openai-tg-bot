@@ -12,6 +12,8 @@ import com.aallam.openai.client.LoggingConfig
 import com.aallam.openai.client.OpenAI
 import com.aallam.openai.client.OpenAIConfig
 import com.aibot.aibot.BuildConfig
+import com.aibot.domain.models.User
+import com.aibot.domain.models.UserPermission
 import com.github.kotlintelegrambot.Bot
 import com.github.kotlintelegrambot.bot
 import com.github.kotlintelegrambot.dispatch
@@ -28,7 +30,9 @@ import com.github.kotlintelegrambot.extensions.filters.Filter
 import kotlinx.coroutines.*
 import kotlin.time.Duration.Companion.minutes
 
-class ConversationModel {
+class ConversationModel(
+    private val chatHistoryAdapter: ChatHistoryAdapter
+) {
     private val botContext = MainScope()
     private val openAI = OpenAI(
         config = OpenAIConfig(
@@ -37,10 +41,22 @@ class ConversationModel {
     )
 
     private enum class Model(val id: String, val description: String) {
-        GPT_3_5_TURBO("gpt-3.5-turbo", """GPT-3.5 Turbo models can understand and generate natural language or code. Returns a maximum of 4,096 output tokens."""),
-        GPT_4("gpt-4", """GPT-4 is a large multimodal model (accepting text or image inputs and outputting text) that can solve difficult problems with greater accuracy than any of our previous models, thanks to its broader general knowledge and advanced reasoning capabilities."""),
-        GPT_4_TURBO("gpt-4-turbo","""GPT-4 Turbo with Vision. The latest GPT-4 Turbo model with vision capabilities."""),
-        GPT_4o("gpt-4o", """GPT-4o (“o” for “omni”) is our most advanced model. It is multimodal (accepting text or image inputs and outputting text), and it has the same high intelligence as GPT-4 Turbo but is much more efficient—it generates text 2x faster and is 50% cheaper.""")
+        GPT_3_5_TURBO(
+            "gpt-3.5-turbo",
+            """GPT-3.5 Turbo models can understand and generate natural language or code. Returns a maximum of 4,096 output tokens."""
+        ),
+        GPT_4(
+            "gpt-4",
+            """GPT-4 is a large multimodal model (accepting text or image inputs and outputting text) that can solve difficult problems with greater accuracy than any of our previous models, thanks to its broader general knowledge and advanced reasoning capabilities."""
+        ),
+        GPT_4_TURBO(
+            "gpt-4-turbo",
+            """GPT-4 Turbo with Vision. The latest GPT-4 Turbo model with vision capabilities."""
+        ),
+        GPT_4o(
+            "gpt-4o",
+            """GPT-4o (“o” for “omni”) is our most advanced model. It is multimodal (accepting text or image inputs and outputting text), and it has the same high intelligence as GPT-4 Turbo but is much more efficient—it generates text 2x faster and is 50% cheaper."""
+        )
     }
 
     private val premium_users =
@@ -97,9 +113,8 @@ class ConversationModel {
     )
 
     private val badNameRe = Regex("[^A-Za-z0-9_-]")
-    private val chatHistoryManager: SqlChatHistoryManager = SqlChatHistoryManager.build()
 
-    init { }
+    init {}
 
     private suspend fun inlineResponder(bot: Bot) {
         inlineQuestion.forEach {
@@ -141,6 +156,7 @@ class ConversationModel {
     }
 
     fun run() {
+        chatHistoryAdapter.addUser(User(99064756L, "Yanis", UserPermission.ADMIN))
 
         runBlocking {
             val models = openAI.models()
@@ -237,7 +253,6 @@ class ConversationModel {
         update.message?.let { message ->
             message.from?.let { from ->
                 val name = cleanName(from.firstName, from.username)
-                chatHistoryManager.addUser(User(from.id, name))
                 val helloResponse = requestChatPrediction(
                     listOf(
                         ChatMessage(
@@ -247,10 +262,17 @@ class ConversationModel {
                         )
                     ), from.id in premium_users
                 )
-                chatHistoryManager.addMessage(from.id, ChatMessage(role = ChatRole.Assistant, content = helloResponse.content, name = "Megumin"))
+                chatHistoryAdapter.addMessage(
+                    from.id,
+                    ChatMessage(role = ChatRole.Assistant, content = helloResponse.content, name = "Megumin")
+                )
                 bot.sendMessage(
                     ChatId.fromId(from.id),
-                    "${helloResponse.content} \nrunning on: ${if (from.id in premium_users) ModelId(Model.GPT_3_5_TURBO.id) else ModelId(Model.GPT_3_5_TURBO.id)}"
+                    "${helloResponse.content} \nrunning on: ${
+                        if (from.id in premium_users) ModelId(Model.GPT_3_5_TURBO.id) else ModelId(
+                            Model.GPT_3_5_TURBO.id
+                        )
+                    }"
                 )
             }
         }
@@ -260,7 +282,7 @@ class ConversationModel {
         update.message?.let { message ->
             message.from?.let { from ->
 
-                if (!chatHistoryManager.hasUser(from.id)) {
+                if (!chatHistoryAdapter.hasUser(from.id)) {
                     bot.sendMessage(
                         ChatId.fromId(from.id),
                         "Try using /start."
@@ -270,9 +292,10 @@ class ConversationModel {
 
                 val userMessage = ((message.caption ?: "") + " " + (message.text ?: "")).trim()
                 val name = cleanName(from.firstName, from.username)
-                val history = chatHistoryManager.getMessages(from.id)
-                val currentMessage = ChatMessage(role = ChatRole.User, content = userMessage, name = name.ifEmpty { null })
-                chatHistoryManager.addMessage(from.id, currentMessage)
+                val history = chatHistoryAdapter.getMessages(from.id)
+                val currentMessage =
+                    ChatMessage(role = ChatRole.User, content = userMessage, name = name.ifEmpty { null })
+                chatHistoryAdapter.addMessage(from.id, currentMessage)
                 val messages = history.takeLast(5).toMutableList()
                 messages.add(currentMessage)
 
@@ -294,15 +317,13 @@ class ConversationModel {
                     val replyChatMessage = ChatMessage(role = rRole, content = rText, name = rName)
                     val replyChat = listOf(assistantInitialization, replyChatMessage, currentMessage)
                     val answer = requestChatPrediction(replyChat, from.id in premium_users)
-                    messages.add(answer)
-                    chatHistoryManager.addMessage(from.id, answer)
+                    chatHistoryAdapter.addMessage(from.id, answer)
                     bot.sendMessage(ChatId.fromId(from.id), answer.content ?: "")
                     return@conversation
                 }
 
                 val answer = requestChatPrediction(messages, from.id in premium_users)
-                messages.add(answer)
-                chatHistoryManager.addMessage(from.id, answer)
+                chatHistoryAdapter.addMessage(from.id, answer)
                 bot.sendMessage(ChatId.fromId(from.id), answer.content ?: "", parseMode = ParseMode.MARKDOWN)
             }
         }

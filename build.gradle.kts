@@ -31,6 +31,8 @@ dependencies {
     implementation("com.google.protobuf:protobuf-kotlin-lite:3.21.12")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.4.1")
     implementation("org.xerial:sqlite-jdbc:3.45.3.0")
+    implementation("org.ktorm:ktorm-core:4.0.0")
+    implementation("org.ktorm:ktorm-support-sqlite:3.6.0")
 }
 
 buildConfig {
