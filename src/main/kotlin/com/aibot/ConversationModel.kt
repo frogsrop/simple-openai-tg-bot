@@ -138,7 +138,7 @@ class ConversationModel(
                         (message.text.orEmpty() + message.caption.orEmpty()).takeIf { it.isNotBlank() },
                         message.replyToMessage,
                         message.photo?.last()?.let { photo -> bot.getImageUrl(photo.fileId) },
-                        message.sticker?.let { bot.getImageUrl(it.fileId) }
+                        message.sticker?.thumb?.let { bot.getImageUrl(it.fileId) }
                     )
                 }
             }
@@ -320,7 +320,8 @@ class ConversationModel(
           text: String?,
           reply: Message?,
           photo: String?,
-          sticker: String? ->            withContext(Dispatchers.Default) {
+          sticker: String? ->
+            withContext(Dispatchers.Default) {
                 if (!chatHistoryAdapter.hasUser(from.id)) {
                     bot.sendMessage(
                         ChatId.fromId(from.id),
