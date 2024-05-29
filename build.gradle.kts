@@ -3,7 +3,7 @@ import org.jetbrains.kotlin.konan.properties.Properties
 
 plugins {
     application
-    kotlin("jvm") version "1.9.22"
+    kotlin("jvm") version "2.0.0"
     id("com.google.protobuf") version "0.8.18"
     kotlin("plugin.serialization") version "1.8.10"
     id("com.github.gmazzo.buildconfig") version "3.1.0"
@@ -25,14 +25,15 @@ repositories {
 dependencies {
     implementation("io.github.kotlin-telegram-bot.kotlin-telegram-bot:telegram:6.1.0")
     implementation("io.ktor:ktor-client-java:2.2.3")
-    implementation("com.aallam.openai:openai-client:3.5.1")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:1.6.4")
+    implementation("com.aallam.openai:openai-client:3.7.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
     implementation("com.google.protobuf:protobuf-javalite:3.21.12")
     implementation("com.google.protobuf:protobuf-kotlin-lite:3.21.12")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.4.1")
     implementation("org.xerial:sqlite-jdbc:3.45.3.0")
     implementation("org.ktorm:ktorm-core:4.0.0")
     implementation("org.ktorm:ktorm-support-sqlite:3.6.0")
+    implementation("com.squareup.retrofit2:retrofit:2.9.0")
 }
 
 buildConfig {

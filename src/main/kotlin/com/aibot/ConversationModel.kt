@@ -3,6 +3,7 @@ package com.aibot
 import com.aallam.openai.api.chat.ChatCompletionRequest
 import com.aallam.openai.api.chat.ChatMessage
 import com.aallam.openai.api.chat.ChatRole
+import com.aallam.openai.api.chat.ImagePart
 import com.aallam.openai.api.exception.OpenAITimeoutException
 import com.aallam.openai.api.http.Timeout
 import com.aallam.openai.api.logging.LogLevel
@@ -20,15 +21,14 @@ import com.github.kotlintelegrambot.dispatch
 import com.github.kotlintelegrambot.dispatcher.command
 import com.github.kotlintelegrambot.dispatcher.inlineQuery
 import com.github.kotlintelegrambot.dispatcher.message
-import com.github.kotlintelegrambot.entities.BotCommand
-import com.github.kotlintelegrambot.entities.ChatId
-import com.github.kotlintelegrambot.entities.ParseMode
-import com.github.kotlintelegrambot.entities.Update
+import com.github.kotlintelegrambot.entities.*
 import com.github.kotlintelegrambot.entities.inlinequeryresults.InlineQueryResult
 import com.github.kotlintelegrambot.entities.inlinequeryresults.InputMessageContent
 import com.github.kotlintelegrambot.extensions.filters.Filter
 import kotlinx.coroutines.*
+import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration.Companion.minutes
+import com.github.kotlintelegrambot.entities.User as TgUser
 
 class ConversationModel(
     private val chatHistoryAdapter: ChatHistoryAdapter
@@ -53,27 +53,29 @@ class ConversationModel(
             "gpt-4-turbo",
             """GPT-4 Turbo with Vision. The latest GPT-4 Turbo model with vision capabilities."""
         ),
-        GPT_4o(
+        GPT_4O(
             "gpt-4o",
             """GPT-4o (“o” for “omni”) is our most advanced model. It is multimodal (accepting text or image inputs and outputting text), and it has the same high intelligence as GPT-4 Turbo but is much more efficient—it generates text 2x faster and is 50% cheaper."""
         )
     }
 
-    private val premium_users =
-        listOf(
-            114765204L,
-            99064756L,
-            2107387576L,
-            835713285L,
-            230655321L,
-            607811624L,
-            201213389L,
-            180096477L,
-            215930580L,
-            1867042039L,
-            251400536L,
-            6743863631L
-        )
+    private val adminUsers = listOf(
+        User(99064756L, "Yanis", UserPermission.ADMIN),
+        User(2107387576L, "Arthur", UserPermission.ADMIN),
+        User(114765204L, "NotAntony", UserPermission.ADMIN)
+    )
+
+//    75508016L,
+//    835713285L,
+//    230655321L,
+//    607811624L,
+//    201213389L,
+//    180096477L,
+//    215930580L,
+//    1867042039L,
+//    251400536L,
+//    6743863631L
+
     private val inlineQuestion = HashMap<Long, Pair<String, String>>()
     private val assistantInitialization = ChatMessage(
         role = ChatRole.System,
@@ -114,6 +116,35 @@ class ConversationModel(
 
     private val badNameRe = Regex("[^A-Za-z0-9_-]")
 
+    private suspend fun Bot.getImageUrl(fileId: String) = withContext(Dispatchers.IO) {
+        val file = getFile(fileId)
+        file.second?.let { return@withContext null }
+        return@withContext file.first?.body()?.result?.filePath?.let { "https://api.telegram.org/file/bot${BuildConfig.botApiKey}/${it}" }
+    }
+
+    private suspend fun handleUpdate(
+        coroutineContext: CoroutineContext = Dispatchers.Main,
+        event: Pair<Update, Bot>,
+        handler: SuspendBotAction
+    ) {
+        botContext.launch(coroutineContext) {
+            val update = event.first
+            val bot = event.second
+            update.message?.let { message ->
+                message.from?.let { from ->
+                    handler(
+                        bot,
+                        from,
+                        (message.text.orEmpty() + message.caption.orEmpty()).takeIf { it.isNotBlank() },
+                        message.replyToMessage,
+                        message.photo?.last()?.let { photo -> bot.getImageUrl(photo.fileId) },
+                        message.sticker?.let { bot.getImageUrl(it.fileId) }
+                    )
+                }
+            }
+        }
+    }
+
     init {}
 
     private suspend fun inlineResponder(bot: Bot) {
@@ -127,7 +158,7 @@ class ConversationModel(
             val prediction =
                 requestChatPrediction(
                     listOf(ChatMessage(ChatRole.User, data?.first?.trim())),
-                    uid in premium_users,
+                    uid in adminUsers.map { it.userId },
                     true
                 )
             val result = listOf(
@@ -156,7 +187,9 @@ class ConversationModel(
     }
 
     fun run() {
-        chatHistoryAdapter.addUser(User(99064756L, "Yanis", UserPermission.ADMIN))
+        adminUsers.forEach {
+            chatHistoryAdapter.addUser(it)
+        }
 
         runBlocking {
             val models = openAI.models()
@@ -171,16 +204,16 @@ class ConversationModel(
             dispatch {
                 command("start") {
                     if (message.chat.type == "private") {
-                        botContext.launch(Dispatchers.Default) { start(update, bot) }
+                        handleUpdate(Dispatchers.Default, update to bot, start)
                     }
                 }
                 command("send") {
                     if (message.chat.type == "private" || message.from?.username == "frogsrop") {
-                        botContext.launch(Dispatchers.Default) { send(update, bot) }
+                        handleUpdate(Dispatchers.Default, update to bot, send)
                     }
                 }
-                message(Filter.Private and (Filter.Reply or Filter.Text) and !Filter.Command) {
-                    botContext.launch(Dispatchers.Default) { conversation(update, bot) }
+                message(Filter.Private and (Filter.Reply or Filter.Text or Filter.Photo or Filter.Sticker) and !Filter.Command) {
+                    handleUpdate(Dispatchers.Default, update to bot, conversation)
                 }
                 inlineQuery {
                     val queryText = inlineQuery.query
@@ -220,7 +253,7 @@ class ConversationModel(
         toSendMessages.add(0, if (short) shortAssistantInitialization else assistantInitialization)
 
         val completionRequest = ChatCompletionRequest(
-            model = ModelId(Model.GPT_3_5_TURBO.id),
+            model = ModelId(Model.GPT_4O.id),
             messages = toSendMessages,
             temperature = 0.7
         )
@@ -233,64 +266,70 @@ class ConversationModel(
 
     }
 
-    private suspend fun send(update: Update, bot: Bot) {
-        update.message?.let { message ->
-            message.text?.let { rawText ->
-                val content = rawText.substring("/send".length).trim()
-                val idx = content.indexOf(' ')
-                val id = content.substring(0, idx).trim()
-                val text = content.substring(idx).trim()
-                print("ID" + id)
-                bot.sendMessage(
-                    ChatId.fromId(id.toLong()),
-                    text
-                )
-            }
-        }
+    private val send: SuspendBotAction = { bot: Bot,
+                                           from: TgUser,
+                                           text: String?,
+                                           reply: Message?,
+                                           photo: String?,
+                                           sticker: String?
+        ->
+        val content = text!!.substring("/send".length).trim()
+        val idx = content.indexOf(' ')
+        val id = content.substring(0, idx).trim()
+        val text = content.substring(idx).trim()
+        bot.sendMessage(
+            ChatId.fromId(id.toLong()),
+            text
+        )
     }
 
-    private suspend fun start(update: Update, bot: Bot) {
-        update.message?.let { message ->
-            message.from?.let { from ->
-                val name = cleanName(from.firstName, from.username)
-                val helloResponse = requestChatPrediction(
-                    listOf(
-                        ChatMessage(
-                            role = ChatRole.User,
-                            content = "Hello, who are you?",
-                            name = name.ifEmpty { null }
-                        )
-                    ), from.id in premium_users
-                )
-                chatHistoryAdapter.addMessage(
-                    from.id,
-                    ChatMessage(role = ChatRole.Assistant, content = helloResponse.content, name = "Megumin")
-                )
-                bot.sendMessage(
-                    ChatId.fromId(from.id),
-                    "${helloResponse.content} \nrunning on: ${
-                        if (from.id in premium_users) ModelId(Model.GPT_3_5_TURBO.id) else ModelId(
-                            Model.GPT_3_5_TURBO.id
-                        )
-                    }"
-                )
-            }
+    private val start: SuspendBotAction =
+        { bot: Bot,
+          from: TgUser,
+          text: String?,
+          reply: Message?,
+          photo: String?,
+          sticker: String? ->
+            val name = cleanName(from.firstName, from.username)
+            val helloResponse = requestChatPrediction(
+                listOf(
+                    ChatMessage(
+                        role = ChatRole.User,
+                        content = "Hello, who are you?",
+                        name = name.ifEmpty { null }
+                    )
+                ), from.id in adminUsers.map { it.userId }
+            )
+            chatHistoryAdapter.addMessage(
+                from.id,
+                ChatMessage(role = ChatRole.Assistant, content = helloResponse.content, name = "Megumin")
+            )
+            bot.sendMessage(
+                ChatId.fromId(from.id),
+                "${helloResponse.content} \nrunning on: ${
+                    if (from.id in adminUsers.map { it.userId }) ModelId(Model.GPT_3_5_TURBO.id) else ModelId(
+                        Model.GPT_3_5_TURBO.id
+                    )
+                }"
+            )
         }
-    }
 
-    private suspend fun conversation(update: Update, bot: Bot) {
-        update.message?.let { message ->
-            message.from?.let { from ->
-
+    private val conversation: SuspendBotAction =
+        { bot: Bot,
+          from: TgUser,
+          text: String?,
+          reply: Message?,
+          photo: String?,
+          sticker: String? ->            withContext(Dispatchers.Default) {
                 if (!chatHistoryAdapter.hasUser(from.id)) {
                     bot.sendMessage(
                         ChatId.fromId(from.id),
                         "Try using /start."
                     )
-                    return@conversation
+                    return@withContext
                 }
 
-                val userMessage = ((message.caption ?: "") + " " + (message.text ?: "")).trim()
+                val userMessage = text?.trim() ?: ""
                 val name = cleanName(from.firstName, from.username)
                 val history = chatHistoryAdapter.getMessages(from.id)
                 val currentMessage =
@@ -299,8 +338,23 @@ class ConversationModel(
                 val messages = history.takeLast(5).toMutableList()
                 messages.add(currentMessage)
 
-                println(name)
-                println(userMessage)
+                photo?.let {
+                    val content = ImagePart(it)
+                    val msg = ChatMessage(ChatRole.User, listOf(content), name.ifEmpty { null })
+                    messages.add(msg)
+                }
+
+                sticker?.let {
+                    val content = ImagePart(it)
+                    val msg = ChatMessage(ChatRole.User, listOf(content), name.ifEmpty { null })
+                    messages.add(msg)
+                }
+
+                println(
+                    """$name\n
+                       |$userMessage
+                    """.trimMargin()
+                )
                 BuildConfig.historyChatId?.let {
                     val result = (name) +
                             (from.username?.let { " username=$it" } ?: "") +
@@ -310,22 +364,22 @@ class ConversationModel(
                 }
 
                 // if reply exists
-                message.replyToMessage?.let { reply ->
+                reply?.let { reply ->
                     val rRole = if (reply.from?.id == from.id) ChatRole.User else ChatRole.Assistant
                     val rName = if (reply.from?.id == from.id) name else null
                     val rText = ((reply.caption ?: "") + " " + (reply.text ?: "")).trim()
                     val replyChatMessage = ChatMessage(role = rRole, content = rText, name = rName)
                     val replyChat = listOf(assistantInitialization, replyChatMessage, currentMessage)
-                    val answer = requestChatPrediction(replyChat, from.id in premium_users)
+                    val answer = requestChatPrediction(replyChat, from.id in adminUsers.map { it.userId })
                     chatHistoryAdapter.addMessage(from.id, answer)
                     bot.sendMessage(ChatId.fromId(from.id), answer.content ?: "")
-                    return@conversation
+                    return@withContext
                 }
 
-                val answer = requestChatPrediction(messages, from.id in premium_users)
+                val answer = requestChatPrediction(messages, from.id in adminUsers.map { it.userId })
                 chatHistoryAdapter.addMessage(from.id, answer)
                 bot.sendMessage(ChatId.fromId(from.id), answer.content ?: "", parseMode = ParseMode.MARKDOWN)
             }
         }
-    }
 }
+typealias SuspendBotAction = suspend (Bot, TgUser, String?, Message?, String?, String?) -> Unit
