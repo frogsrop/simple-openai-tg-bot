@@ -1,18 +1,20 @@
 package com.aibot
 
 import com.aallam.openai.api.chat.ChatMessage
-import com.aibot.domain.models.Message
+import com.aibot.domain.models.MessageData
+import com.aibot.domain.models.MessageData.Companion.toChatMessage
 import com.aibot.domain.models.Role
 import com.aibot.domain.models.User
 import com.aibot.repositories.MessagesRepository
 import com.aibot.repositories.UsersRepository
+import com.github.kotlintelegrambot.Bot
 
 
 class ChatHistoryAdapter(
     private val usersRepository: UsersRepository,
     private val messagesRepository: MessagesRepository
 ) {
-    fun getMessages(userId: Long): List<ChatMessage> {
+    suspend fun getMessages(bot: Bot, userId: Long): List<ChatMessage> {
         val messages = messagesRepository.getMessages(userId)
         val user = getUser(userId)
         return messages.map {
@@ -21,12 +23,12 @@ class ChatHistoryAdapter(
                 Role.ASSISTANT -> "Megumin"
                 Role.SYSTEM -> null
             }
-            ChatMessage(it.role.chatRole, it.message, name)
+            it.toChatMessage(bot, name)
         }
     }
 
-    fun addMessage(userId: Long, message: ChatMessage) {
-        return messagesRepository.addMessage(userId, Message(System.currentTimeMillis(), userId, message.content ?: "", Role.from(message.role)))
+    fun addMessage(messageData: MessageData) {
+        return messagesRepository.addMessage(messageData)
     }
 
     fun addUser(newUser: User) {
@@ -41,7 +43,7 @@ class ChatHistoryAdapter(
         return getUser(userId) != null
     }
 
-    private fun deleteMessages(userId: Long) {
+    fun deleteMessages(userId: Long) {
         return messagesRepository.deleteMessages(userId)
     }
 }

@@ -1,15 +1,15 @@
 package com.aibot.repositories
 
-import com.aibot.domain.models.Message
+import com.aibot.domain.models.MessageData
 import com.aibot.domain.models.Role
 import com.aibot.repositories.tables.Messages
 import org.ktorm.database.Database
 import org.ktorm.dsl.*
 
 interface MessagesRepository {
-    fun selectMessages(userId: Long): List<Message>
-    fun getMessages(userId: Long): List<Message>
-    fun addMessage(userId: Long, message: Message)
+    fun selectMessages(userId: Long): List<MessageData>
+    fun getMessages(userId: Long): List<MessageData>
+    fun addMessage(messageData: MessageData)
     fun deleteMessages(userId: Long)
 }
 
@@ -27,6 +27,7 @@ class KtormMessagesRepository(
                         ts INTEGER,
                         user_id INTEGER REFERENCES users(user_id),
                         message TEXT,
+                        resource TEXT,
                         role TEXT
                     )"""
                 )
@@ -34,38 +35,41 @@ class KtormMessagesRepository(
         }
     }
 
-    override fun selectMessages(userId: Long): List<Message> {
+    override fun selectMessages(userId: Long): List<MessageData> {
         return database.from(Messages)
             .select(
                 Messages.messageId,
                 Messages.ts,
                 Messages.userId,
                 Messages.message,
+                Messages.resource,
                 Messages.role
             )
             .where(Messages.userId.eq(userId))
             .map { row ->
-                Message(
+                MessageData(
                     ts = row[Messages.ts]!!,
                     userId = row[Messages.userId]!!,
                     message = row[Messages.message]!!,
+                    resource = row[Messages.resource]!!,
                     role = Role.valueOf(row[Messages.role]!!),
                 )
             }
             .toList()
     }
 
-    override fun getMessages(userId: Long): List<Message> {
+    override fun getMessages(userId: Long): List<MessageData> {
         val chatMessages = selectMessages(userId)
         return chatMessages.sortedBy { it.ts }
     }
 
-    override fun addMessage(userId: Long, message: Message) {
+    override fun addMessage(messageData: MessageData) {
         database.insert(Messages) {
-            set(it.ts, message.ts)
-            set(it.userId, message.userId)
-            set(it.message, message.message)
-            set(it.role, message.role.name)
+            set(it.ts, messageData.ts)
+            set(it.userId, messageData.userId)
+            set(it.message, messageData.message)
+            set(it.resource, messageData.resource)
+            set(it.role, messageData.role.name)
         }
     }
 

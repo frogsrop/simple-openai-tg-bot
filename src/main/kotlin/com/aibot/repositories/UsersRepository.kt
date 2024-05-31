@@ -1,5 +1,6 @@
 package com.aibot.repositories
 
+import com.aibot.domain.models.Model
 import com.aibot.domain.models.User
 import com.aibot.domain.models.UserPermission
 import com.aibot.repositories.tables.Users
@@ -23,7 +24,8 @@ class KtormUsersRepository(
                         CREATE TABLE IF NOT EXISTS users (
                         user_id LONG PRIMARY KEY,
                         permission INTEGER,
-                        name VARCHAR
+                        name VARCHAR,
+                        model VARCHAR
                     )"""
                 )
             }
@@ -35,9 +37,11 @@ class KtormUsersRepository(
             set(it.user_id, newUser.userId)
             set(it.name, newUser.name)
             set(it.permission, newUser.permission.value)
+            set(it.model, newUser.model.id)
             onConflict(it.user_id) {
                 set(it.name, newUser.name)
                 set(it.permission, newUser.permission.value)
+                set(it.model, newUser.model.id)
             }
         }
     }
@@ -47,14 +51,16 @@ class KtormUsersRepository(
             .select(
                 Users.user_id,
                 Users.name,
-                Users.permission
+                Users.permission,
+                Users.model
             )
             .where(Users.user_id.eq(userId))
             .map { row ->
                 User(
                     userId = row[Users.user_id]!!,
                     name = row[Users.name]!!,
-                    permission = UserPermission.from(row[Users.permission]!!)!!
+                    permission = UserPermission.from(row[Users.permission]!!)!!,
+                    model = Model.from(row[Users.model]!!)!!
                 )
             }
 

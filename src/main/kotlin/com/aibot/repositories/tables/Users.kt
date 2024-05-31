@@ -9,4 +9,5 @@ object Users : Table<Nothing>("users") {
     val user_id = long("user_id").primaryKey()
     val permission = int("permission")
     val name = varchar("name")
+    val model = varchar("model")
 }

@@ -10,5 +10,6 @@ object Messages : Table<Nothing>("messages") {
     val ts = long("ts")
     val userId = long("user_id")
     val message = text("message")
+    val resource = text("resource")
     val role = text("role")
 }
