@@ -9,11 +9,9 @@ plugins {
     id("com.github.gmazzo.buildconfig") version "3.1.0"
 }
 
-buildscript {
-}
-
 group = "com.aibot"
 version = "0.3.0"
+
 application {
     mainClass.set("com.aibot.ConversationApplicationKt")
 }
@@ -22,6 +20,7 @@ repositories {
     mavenCentral()
     maven(url = "https://jitpack.io")
 }
+
 dependencies {
     implementation("io.github.kotlin-telegram-bot.kotlin-telegram-bot:telegram:6.1.0")
     implementation("io.ktor:ktor-client-java:2.2.3")
@@ -46,30 +45,28 @@ buildConfig {
 
 tasks {
     val fatJar = register<Jar>("fatJar") {
-        dependsOn.addAll(
-            listOf(
-                "compileJava",
-                "compileKotlin",
-                "processResources"
-            )
-        ) // We need this for Gradle optimization to work
-        archiveClassifier.set("standalone") // Naming the jar
+        dependsOn("compileJava", "compileKotlin", "processResources")
+        archiveClassifier.set("standalone")
         duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-        manifest { attributes(mapOf("Main-Class" to application.mainClass)) } // Provided we set it up in the application plugin configuration
+        manifest {
+            attributes(mapOf("Main-Class" to application.mainClass.get()))
+        }
         val sourcesMain = sourceSets.main.get()
         val contents = configurations.runtimeClasspath.get()
-            .map { if (it.isDirectory) it else zipTree(it) } +
-                sourcesMain.output
+            .map { if (it.isDirectory) it else zipTree(it) } + sourcesMain.output
         from(contents)
     }
+
     build {
-        dependsOn(fatJar) // Trigger fat jar creation during build
+        dependsOn(fatJar)
     }
 }
+
 val compileKotlin: KotlinCompile by tasks
 compileKotlin.kotlinOptions {
     jvmTarget = "17"
 }
+
 val compileTestKotlin: KotlinCompile by tasks
 compileTestKotlin.kotlinOptions {
     jvmTarget = "17"

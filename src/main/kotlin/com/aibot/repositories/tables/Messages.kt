@@ -1,9 +1,6 @@
 package com.aibot.repositories.tables
 
-import org.ktorm.schema.Table
-import org.ktorm.schema.int
-import org.ktorm.schema.long
-import org.ktorm.schema.text
+import org.ktorm.schema.*
 
 object Messages : Table<Nothing>("messages") {
     val messageId = int("message_id").primaryKey()
@@ -12,4 +9,5 @@ object Messages : Table<Nothing>("messages") {
     val message = text("message")
     val resource = text("resource")
     val role = text("role")
+    val usage = float("usage")
 }

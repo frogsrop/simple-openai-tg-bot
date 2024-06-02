@@ -4,6 +4,7 @@ import com.aibot.domain.models.Model
 import com.aibot.domain.models.User
 import com.aibot.domain.models.UserPermission
 import com.aibot.repositories.tables.Users
+import kotlinx.serialization.builtins.IntArraySerializer
 import org.ktorm.database.Database
 import org.ktorm.dsl.*
 import org.ktorm.support.sqlite.insertOrUpdate
@@ -11,6 +12,8 @@ import org.ktorm.support.sqlite.insertOrUpdate
 interface UsersRepository {
     fun addUser(newUser: User)
     fun getUser(userId: Long): User?
+    fun deleteUser(userId: Long)
+    fun listUsers(): List<User>
 }
 
 class KtormUsersRepository(
@@ -34,13 +37,13 @@ class KtormUsersRepository(
 
     override fun addUser(newUser: User) {
         database.insertOrUpdate(Users) {
-            set(it.user_id, newUser.userId)
+            set(it.userId, newUser.userId)
             set(it.name, newUser.name)
-            set(it.permission, newUser.permission.value)
+            set(it.permission, newUser.permission.ordinal)
             set(it.model, newUser.model.id)
-            onConflict(it.user_id) {
+            onConflict(it.userId) {
                 set(it.name, newUser.name)
-                set(it.permission, newUser.permission.value)
+                set(it.permission, newUser.permission.ordinal)
                 set(it.model, newUser.model.id)
             }
         }
@@ -49,15 +52,15 @@ class KtormUsersRepository(
     override fun getUser(userId: Long): User? {
         val users = database.from(Users)
             .select(
-                Users.user_id,
+                Users.userId,
                 Users.name,
                 Users.permission,
                 Users.model
             )
-            .where(Users.user_id.eq(userId))
+            .where(Users.userId.eq(userId))
             .map { row ->
                 User(
-                    userId = row[Users.user_id]!!,
+                    userId = row[Users.userId]!!,
                     name = row[Users.name]!!,
                     permission = UserPermission.from(row[Users.permission]!!)!!,
                     model = Model.from(row[Users.model]!!)!!
@@ -65,5 +68,28 @@ class KtormUsersRepository(
             }
 
         return users.firstOrNull()
+    }
+
+    override fun deleteUser(userId: Long) {
+        database.delete(Users) {
+            it.userId eq userId
+        }
+    }
+
+    override fun listUsers(): List<User> {
+        return database.from(Users)
+            .select(
+                Users.userId,
+                Users.name,
+                Users.permission,
+                Users.model
+            ).map { row ->
+                User(
+                    userId = row[Users.userId]!!,
+                    name = row[Users.name]!!,
+                    permission = UserPermission.from(row[Users.permission]!!)!!,
+                    model = Model.from(row[Users.model]!!)!!
+                )
+            }.toList()
     }
 }

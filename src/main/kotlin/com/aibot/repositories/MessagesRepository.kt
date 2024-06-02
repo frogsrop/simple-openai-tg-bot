@@ -11,6 +11,7 @@ interface MessagesRepository {
     fun getMessages(userId: Long): List<MessageData>
     fun addMessage(messageData: MessageData)
     fun deleteMessages(userId: Long)
+    fun getUsage(userId: Long): Float
 }
 
 class KtormMessagesRepository(
@@ -28,7 +29,8 @@ class KtormMessagesRepository(
                         user_id INTEGER REFERENCES users(user_id),
                         message TEXT,
                         resource TEXT,
-                        role TEXT
+                        role TEXT,
+                        usage FLOAT
                     )"""
                 )
             }
@@ -43,7 +45,8 @@ class KtormMessagesRepository(
                 Messages.userId,
                 Messages.message,
                 Messages.resource,
-                Messages.role
+                Messages.role,
+                Messages.usage
             )
             .where(Messages.userId.eq(userId))
             .map { row ->
@@ -53,6 +56,7 @@ class KtormMessagesRepository(
                     message = row[Messages.message]!!,
                     resource = row[Messages.resource]!!,
                     role = Role.valueOf(row[Messages.role]!!),
+                    usage = row[Messages.usage]!!
                 )
             }
             .toList()
@@ -70,6 +74,7 @@ class KtormMessagesRepository(
             set(it.message, messageData.message)
             set(it.resource, messageData.resource)
             set(it.role, messageData.role.name)
+            set(it.usage, messageData.usage)
         }
     }
 
@@ -77,5 +82,15 @@ class KtormMessagesRepository(
         database.delete(Messages) {
             it.userId eq userId
         }
+    }
+
+    override fun getUsage(userId: Long): Float {
+        return database.from(Messages)
+            .select(
+                Messages.usage,
+                Messages.userId
+            )
+            .where(Messages.userId.eq(userId))
+            .fold(0f) { acc, row -> acc + row[Messages.usage]!! }
     }
 }

@@ -4,6 +4,7 @@ import com.aallam.openai.api.chat.ChatMessage
 import com.aallam.openai.api.chat.ChatRole
 import com.aallam.openai.api.chat.ImagePart
 import com.aibot.aibot.BuildConfig
+import com.aibot.domain.models.MessageData.Companion.toChatMessage
 import com.github.kotlintelegrambot.Bot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -13,6 +14,7 @@ data class MessageData(
     val message: String,
     val resource: String,
     val role: Role,
+    val usage: Float,
     val ts: Long = System.currentTimeMillis()
 ) {
     companion object {
@@ -21,7 +23,13 @@ data class MessageData(
             file.second?.let { return@withContext null }
             return@withContext file.first?.body()?.result?.filePath?.let { "https://api.telegram.org/file/bot${BuildConfig.botApiKey}/${it}" }
         }
-        suspend fun MessageData.toChatMessage(bot: Bot, name: String?): ChatMessage {
+
+        suspend fun MessageData.toChatMessage(bot: Bot, user: User): ChatMessage {
+            val name = when (role) {
+                Role.USER -> user.name.ifEmpty { null }
+                Role.ASSISTANT -> "Megumin"
+                Role.SYSTEM -> null
+            }
             if (this.resource.isEmpty()) {
                 return ChatMessage(this.role.chatRole, this.message, name)
             } else {

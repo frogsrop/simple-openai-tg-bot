@@ -1,8 +1,8 @@
 package com.aibot
 
 import com.aallam.openai.api.chat.ChatCompletionRequest
-import com.aallam.openai.api.chat.ChatMessage
 import com.aallam.openai.api.chat.ChatRole
+import com.aallam.openai.api.core.Usage
 import com.aallam.openai.api.exception.OpenAITimeoutException
 import com.aallam.openai.api.http.Timeout
 import com.aallam.openai.api.logging.LogLevel
@@ -13,9 +13,11 @@ import com.aallam.openai.client.OpenAI
 import com.aallam.openai.client.OpenAIConfig
 import com.aibot.Utils.Companion.assistantInitialization
 import com.aibot.Utils.Companion.cleanName
-import com.aibot.Utils.Companion.shortAssistantInitialization
+import com.aibot.Utils.Companion.evaluatePrice
+import com.aibot.Utils.Companion.getCommands
 import com.aibot.aibot.BuildConfig
 import com.aibot.domain.models.*
+import com.aibot.domain.models.MessageData.Companion.toChatMessage
 import com.github.kotlintelegrambot.Bot
 import com.github.kotlintelegrambot.bot
 import com.github.kotlintelegrambot.dispatch
@@ -28,7 +30,14 @@ import com.github.kotlintelegrambot.entities.inlinequeryresults.InlineQueryResul
 import com.github.kotlintelegrambot.entities.inlinequeryresults.InputMessageContent
 import com.github.kotlintelegrambot.entities.keyboard.InlineKeyboardButton
 import com.github.kotlintelegrambot.extensions.filters.Filter
+import com.github.kotlintelegrambot.logging.LogLevel.*
+import com.github.kotlintelegrambot.types.TelegramBotResult
 import kotlinx.coroutines.*
+import java.text.DecimalFormat
+import java.text.DecimalFormatSymbols
+import java.util.*
+import java.util.concurrent.Executors
+import kotlin.collections.HashMap
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration.Companion.minutes
 import com.github.kotlintelegrambot.entities.User as TgUser
@@ -36,7 +45,9 @@ import com.github.kotlintelegrambot.entities.User as TgUser
 class ConversationModel(
     private val chatHistoryAdapter: ChatHistoryAdapter
 ) {
-    private val botContext = MainScope()
+    private val botContext = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val sendMessageContext = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+
     private val openAI = OpenAI(
         config = OpenAIConfig(
             BuildConfig.openAiApiKey, LoggingConfig(LogLevel.None, logger = Logger.Empty), timeout = Timeout(10.minutes)
@@ -44,23 +55,111 @@ class ConversationModel(
     )
 
     private val adminUsers = listOf(
-        User(99064756L, "Yanis", UserPermission.ADMIN, Model.GPT_3_5_TURBO),
-        User(2107387576L, "Arthur", UserPermission.ADMIN, Model.GPT_3_5_TURBO),
-        User(114765204L, "NotAntony", UserPermission.ADMIN, Model.GPT_3_5_TURBO)
+        User.buildAdmin(99064756L, "Yanis"),
+        User.buildAdmin(2107387576L, "Arthur"),
+        User.buildAdmin(114765204L, "NotAntony")
     )
 
-//    75508016L,
-//    835713285L,
-//    230655321L,
-//    607811624L,
-//    201213389L,
-//    180096477L,
-//    215930580L,
-//    1867042039L,
-//    251400536L,
-//    6743863631L
-
+    private val df = DecimalFormat("#.#######", DecimalFormatSymbols(Locale.US))
     private val inlineQuestion = HashMap<Long, Pair<String, String>>()
+    fun escapeMarkdown(text: String): String {
+        val charactersToEscape = listOf(
+            '_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'
+        )
+
+        val stringBuilder = StringBuilder()
+        var insideCodeBlock = false
+
+        val lines = text.lines()
+
+        for (line in lines) {
+            if (line.startsWith("```")) {
+                insideCodeBlock = !insideCodeBlock
+                stringBuilder.append(line).append("\n")
+                continue
+            }
+
+            if (insideCodeBlock) {
+                stringBuilder.append(line).append("\n")
+            } else {
+                for (char in line) {
+                    if (char in charactersToEscape) {
+                        stringBuilder.append('\\')
+                    }
+                    stringBuilder.append(char)
+                }
+                stringBuilder.append("\n")
+            }
+        }
+
+        return stringBuilder.toString()
+    }
+    suspend fun Bot.sendMessageWithRetry(chatId: Long, message: String, maxRetries: Int = 5, parseMode: ParseMode? = ParseMode.HTML) {
+        var parseMode = parseMode
+        var attempts = 0
+        var success = false
+        val originalMessage = message.substring(0)
+        var message = message
+        var description = ""
+        println("sending: \"$message\"")
+        while (attempts < maxRetries && !success) {
+            try {
+                withContext(sendMessageContext) {
+                    val response = sendMessage(ChatId.fromId(chatId), message, parseMode = parseMode)
+                    success = response.isSuccess
+                    response.fold(
+                        { res ->
+                            println("sent with: ${parseMode?.name}")
+                        },
+                        { er ->
+                            val errorDescription: String? = when (er) {
+                                is TelegramBotResult.Error.HttpError -> "${er.httpCode} ${er.description}"
+                                is TelegramBotResult.Error.TelegramApi -> "${er.errorCode} ${er.description}"
+                                is TelegramBotResult.Error.InvalidResponse -> "${er.httpCode} ${er.httpStatusMessage}"
+                                is TelegramBotResult.Error.Unknown -> er.exception.message
+                            }
+                            println("error: $errorDescription")
+                        }
+                    )
+                }
+            } catch (e: Exception) {
+                println("Error sending message: ${e.message}")
+                e.printStackTrace()
+            }
+            attempts++
+            if (!success) {
+                delay(1000L * attempts) // Exponential backoff
+            }
+            when (attempts) {
+                (maxRetries - 1) -> {
+                    parseMode = null
+                    message = originalMessage
+                }
+                (maxRetries - 2) -> {
+                    message = escapeMarkdown(originalMessage)
+                    parseMode = ParseMode.MARKDOWN
+                }
+                (maxRetries - 3) -> {
+                    message = escapeMarkdown(originalMessage)
+                    parseMode = ParseMode.MARKDOWN_V2
+                }
+                (maxRetries - 4) -> {
+                    message = originalMessage
+                    parseMode = ParseMode.MARKDOWN
+                }
+            }
+        }
+
+        if (!success) {
+            println("Failed to send message after $maxRetries attempts:\n${description}")
+        }
+    }
+
+    suspend fun Bot.logInTg(text: String) {
+        BuildConfig.historyChatId?.let {
+            sendMessageWithRetry(it, text)
+        }
+    }
 
     private suspend fun handleUpdate(
         coroutineContext: CoroutineContext = Dispatchers.Main,
@@ -68,25 +167,31 @@ class ConversationModel(
         handler: SuspendBotAction
     ) {
         botContext.launch(coroutineContext) {
-            val update = event.first
-            val bot = event.second
-            update.message?.let { message ->
-                message.from?.let { from ->
-                    val user = chatHistoryAdapter.getUser(from.id)
-                    if (user == null) {
-                        bot.sendMessage(ChatId.fromId(from.id), "Contact Yanis")
-                        return@let
+            try {
+                val update = event.first
+                val bot = event.second
+                update.message?.let { message ->
+                    message.from?.let { from ->
+                        val user = chatHistoryAdapter.getUser(from.id)
+                        if (user == null) {
+                            bot.logInTg("/start name:\"${from.firstName} ${from.lastName}\" username:\"${(from.username?.let { " username=$it" } ?: "")}\" id=\"${from.id}L\"")
+                            bot.sendMessageWithRetry(from.id, "Contact Yanis")
+                            return@let
+                        }
+                        handler(
+                            bot,
+                            from,
+                            user,
+                            (message.text.orEmpty() + message.caption.orEmpty()).takeIf { it.isNotBlank() },
+                            message.replyToMessage,
+                            message.photo?.last()?.fileId,
+                            message.sticker?.thumb?.fileId
+                        )
                     }
-                    handler(
-                        bot,
-                        from,
-                        user,
-                        (message.text.orEmpty() + message.caption.orEmpty()).takeIf { it.isNotBlank() },
-                        message.replyToMessage,
-                        message.photo?.last()?.fileId,
-                        message.sticker?.thumb?.fileId
-                    )
                 }
+            } catch (e: Exception) {
+                println("Error handling update: ${e.message}")
+                e.printStackTrace()
             }
         }
     }
@@ -101,7 +206,8 @@ class ConversationModel(
             inlineQuestion[it.key] = "" to (inlineQuestion[it.key]?.second ?: "")
             val prediction =
                 requestChatPrediction(
-                    listOf(ChatMessage(ChatRole.User, data?.first?.trim())),
+                    bot,
+                    listOf(MessageData(user.userId, data?.first?.trim() ?: "", "", Role.USER, 99999f)),
                     user,
                     true
                 )
@@ -109,20 +215,20 @@ class ConversationModel(
                 InlineQueryResult.Article(
                     id = "0",
                     title = "Result without question",
-                    inputMessageContent = InputMessageContent.Text(prediction.content ?: "_empty_"),
-                    description = "Response for ${data?.first}: ${prediction.content ?: "_empty_"}",
+                    inputMessageContent = InputMessageContent.Text(prediction.second ?: "_empty_"),
+                    description = "Response for ${data?.first}: ${prediction.second ?: "_empty_"}",
                 ),
                 InlineQueryResult.Article(
                     id = "1",
                     title = "Result with question",
                     inputMessageContent = InputMessageContent.Text(
-                        ("Question: ${data?.first}\nResponse: " + (prediction.content ?: "_empty_"))
+                        ("Question: ${data?.first}\nResponse: " + (prediction.second ?: "_empty_"))
                     ),
-                    description = "Response for ${data?.first}: ${prediction.content ?: "_empty_"}",
+                    description = "Response for ${data?.first}: ${prediction.second ?: "_empty_"}",
                 )
             )
             if (inlineQuestion[it.key]?.second == data?.second && data?.second != null) {
-                print("Good response: ${data.second}")
+                println("Good response: ${data.second}")
                 bot.answerInlineQuery(data.second, result)
             }
         }
@@ -132,7 +238,9 @@ class ConversationModel(
 
     fun run() {
         adminUsers.forEach {
-            chatHistoryAdapter.addUser(it)
+            if (!chatHistoryAdapter.hasUser(it.userId)) {
+                chatHistoryAdapter.addUser(it)
+            }
         }
 
         runBlocking {
@@ -145,6 +253,8 @@ class ConversationModel(
 
         val bot = bot {
             token = BuildConfig.botApiKey
+            logLevel = Error
+            timeout = 60
             dispatch {
                 command("start") {
                     if (message.chat.type == "private") {
@@ -166,6 +276,31 @@ class ConversationModel(
                         handleUpdate(Dispatchers.Default, update to bot, changeModel)
                     }
                 }
+                command("help") {
+                    if (message.chat.type == "private") {
+                        handleUpdate(Dispatchers.Default, update to bot, help)
+                    }
+                }
+                command("add_user") {
+                    if (message.chat.type == "private") {
+                        handleUpdate(Dispatchers.Default, update to bot, addUser)
+                    }
+                }
+                command("delete_user") {
+                    if (message.chat.type == "private") {
+                        handleUpdate(Dispatchers.Default, update to bot, deleteUser)
+                    }
+                }
+                command("usage") {
+                    if (message.chat.type == "private") {
+                        handleUpdate(Dispatchers.Default, update to bot, getUsage)
+                    }
+                }
+                command("list_users") {
+                    if (message.chat.type == "private") {
+                        handleUpdate(Dispatchers.Default, update to bot, listUsers)
+                    }
+                }
                 for (entry in Model.entries) {
                     callbackQuery(
                         callbackData = "MODEL_${entry.ordinal}"
@@ -173,12 +308,16 @@ class ConversationModel(
                         val id = callbackQuery.from.id
                         val user = chatHistoryAdapter.getUser(id)
                         if (user == null) {
-                            bot.sendMessage(ChatId.fromId(id), "Contact Yanis")
+                            bot.sendMessageWithRetry(id, "Contact Yanis")
                             return@callbackQuery
                         }
                         val model = Model.entries[callbackQuery.data.substring("MODEL_".length).toInt()]!!
                         chatHistoryAdapter.addUser(user.copy(model = model))
-                        bot.sendMessage(ChatId.fromId(user.userId), text = "New model:\n${model.id}: ${model.description}")
+
+                        bot.sendMessageWithRetry(
+                            user.userId,
+                            "New model:\n${model.id}: ${model.description}"
+                        )
                     }
                 }
                 message(Filter.Private and (Filter.Reply or Filter.Text or Filter.Photo or Filter.Sticker) and !Filter.Command) {
@@ -194,37 +333,10 @@ class ConversationModel(
             }
         }
 
-        val commands = mutableListOf(
-            BotCommand("start", "Start conversation or reset context"),
-            BotCommand("list_models", "Show list of available models"),
-            BotCommand("change_model", "Change model")
-        )
-        print("setMyCommands result: ${bot.setMyCommands(commands)}")
-        botContext.launch(Dispatchers.IO) { inlineResponder(bot) }
+        val commands = getCommands(UserPermission.DEFAULT)
+        println("setMyCommands result: ${bot.setMyCommands(commands)}")
+//        botContext.launch(Dispatchers.IO) { inlineResponder(bot) }
         bot.startPolling()
-    }
-
-    private suspend fun requestChatPrediction(
-        messages: List<ChatMessage>,
-        user: User,
-        short: Boolean = false
-    ): ChatMessage {
-        val toSendMessages = messages.takeLast(10).toMutableList()
-        toSendMessages.add(0, if (short) shortAssistantInitialization else assistantInitialization)
-
-        val completionRequest = ChatCompletionRequest(
-            model = ModelId(user.model.id),
-            messages = toSendMessages,
-            temperature = 0.7
-        )
-
-        return try {
-            val completion = openAI.chatCompletion(completionRequest)
-            completion.choices.firstNotNullOf { it.message }
-        } catch (e: OpenAITimeoutException) {
-            ChatMessage(ChatRole.System, "Request timed out. Try sending it again or paraphrase", "System")
-        }
-
     }
 
     private val send: SuspendBotAction = { bot: Bot,
@@ -236,11 +348,62 @@ class ConversationModel(
                                            sticker: String?
         ->
         withContext(Dispatchers.Default) {
-            val content = text!!.substring("/send".length).trim()
-            val idx = content.indexOf(' ')
-            val id = content.substring(0, idx).trim()
-            val msg = content.substring(idx).trim()
-            bot.sendMessage(ChatId.fromId(id.toLong()), msg)
+            if (user.permission < UserPermission.PREMIUM) return@withContext
+            text?.let {
+                val args = it.split(" ")
+
+                if (args.size - 1 < 2) {
+                    bot.sendMessageWithRetry(
+                        user.userId,
+                        "Not all arguments passed"
+                    )
+                    return@withContext
+                }
+                val id = try {
+                    args[1].toLong()
+                } catch (e: Throwable) {
+                    bot.sendMessageWithRetry(
+                        user.userId,
+                        "Bad argument: id == ${args[1]}"
+                    )
+                    return@withContext
+                }
+                val idStr = id.toString()
+                val idx = it.indexOf(idStr)
+                bot.sendMessageWithRetry(id, it.substring(idx + idStr.length))
+            }
+        }
+    }
+
+    private suspend fun requestChatPrediction(
+        bot: Bot,
+        messages: List<MessageData>,
+        user: User,
+        short: Boolean = false
+    ): Pair<Usage?, String?> {
+        val toSendMessages = messages.filter {
+            val isPremium = user.permission >= UserPermission.PREMIUM
+            val hasResource = it.resource.isNotEmpty()
+            val imgModel = user.model.imgModel
+
+            hasResource && isPremium && imgModel || !hasResource
+        }.map { it.toChatMessage(bot, user) }.takeLast(5).toMutableList()
+        toSendMessages.add(0, assistantInitialization)
+
+        val completionRequest = ChatCompletionRequest(
+            model = ModelId(user.model.id),
+            messages = toSendMessages,
+            temperature = 0.7
+        )
+
+        return try {
+            val completion = openAI.chatCompletion(completionRequest)
+            val content = completion.choices.firstNotNullOf { it.message }.content
+            println("generated response: ${content?.substring(0, 10)}...")
+            completion.usage to content
+        } catch (e: OpenAITimeoutException) {
+            println("failed with response")
+            null to null
         }
     }
 
@@ -253,10 +416,44 @@ class ConversationModel(
                                                  sticker: String?
         ->
         withContext(Dispatchers.Default) {
+            if (user.permission < UserPermission.PREMIUM) return@withContext
             val models = Model.entries.map {
                 "${it.id}: ${it.description}"
             }.joinToString("\n\n")
-            bot.sendMessage(ChatId.fromId(user.userId), models)
+            bot.sendMessageWithRetry(user.userId, models)
+        }
+    }
+
+    private val help: SuspendBotAction = { bot: Bot,
+                                           from: TgUser,
+                                           user: User,
+                                           text: String?,
+                                           reply: Message?,
+                                           photo: String?,
+                                           sticker: String?
+        ->
+        withContext(Dispatchers.Default) {
+            bot.sendMessageWithRetry(
+                user.userId,
+                getCommands(user.permission).map {
+                    "/${it.command} - ${it.description}"
+                }.joinToString("\n")
+            )
+        }
+    }
+    private val getUsage: SuspendBotAction = { bot: Bot,
+                                               from: TgUser,
+                                               user: User,
+                                               text: String?,
+                                               reply: Message?,
+                                               photo: String?,
+                                               sticker: String?
+        ->
+        withContext(Dispatchers.Default) {
+            bot.sendMessageWithRetry(
+                user.userId,
+                "Overall usage: ${df.format(chatHistoryAdapter.getUsage(user.userId))}$"
+            )
         }
     }
     private val changeModel: SuspendBotAction = { bot: Bot,
@@ -268,6 +465,7 @@ class ConversationModel(
                                                   sticker: String?
         ->
         withContext(Dispatchers.Default) {
+            if (user.permission < UserPermission.PREMIUM) return@withContext
             val content = text!!.substring("/change_model".length).trim()
             val ids = Model.entries.map { it.id }
             if (content.isEmpty() || content !in ids) {
@@ -275,23 +473,33 @@ class ConversationModel(
                     text = Model.GPT_3_5_TURBO.id,
                     callbackData = "MODEL_${Model.GPT_3_5_TURBO.ordinal}"
                 )
-                val gpt_4o = InlineKeyboardButton.CallbackData(text = Model.GPT_4O.id, callbackData = "MODEL_${Model.GPT_4O.ordinal}")
-                val gpt_4 = InlineKeyboardButton.CallbackData(text = Model.GPT_4.id, callbackData ="MODEL_${Model.GPT_4.ordinal}")
+                val gpt_4o = InlineKeyboardButton.CallbackData(
+                    text = Model.GPT_4O.id,
+                    callbackData = "MODEL_${Model.GPT_4O.ordinal}"
+                )
+                val gpt_4 = InlineKeyboardButton.CallbackData(
+                    text = Model.GPT_4.id,
+                    callbackData = "MODEL_${Model.GPT_4.ordinal}"
+                )
                 val gpt_4_turbo =
-                    InlineKeyboardButton.CallbackData(text = Model.GPT_4_TURBO.id, callbackData = "MODEL_${Model.GPT_4_TURBO.ordinal}")
-
+                    InlineKeyboardButton.CallbackData(
+                        text = Model.GPT_4_TURBO.id,
+                        callbackData = "MODEL_${Model.GPT_4_TURBO.ordinal}"
+                    )
                 val markup = InlineKeyboardMarkup.create(
                     listOf(
                         listOf(gpt_3_5, gpt_4o),
                         listOf(gpt_4, gpt_4_turbo)
                     )
                 )
+
                 bot.sendMessage(ChatId.fromId(user.userId), text = "Select model", replyMarkup = markup)
+
                 return@withContext
             }
             val model = Model.from(content)!!
             chatHistoryAdapter.addUser(user.copy(model = model))
-            bot.sendMessage(ChatId.fromId(user.userId), text = "New model set:\n ${model.id}: ${model.description}")
+            bot.sendMessageWithRetry(user.userId, "New model set:\n ${model.id}: ${model.description}")
         }
     }
     private val start: SuspendBotAction =
@@ -309,26 +517,160 @@ class ConversationModel(
                 chatHistoryAdapter.addUser(user)
 
                 val helloResponse = requestChatPrediction(
+                    bot,
                     listOf(
-                        ChatMessage(
-                            role = ChatRole.User,
-                            content = "Hello, who are you?",
-                            name = user.name.ifEmpty { null }
+                        MessageData(
+                            from.id,
+                            "Hello, who are you?",
+                            "",
+                            Role.USER,
+                            0f
                         )
                     ),
                     user
                 )
 
                 chatHistoryAdapter.addMessage(
-                    MessageData(user.userId, helloResponse.content ?: "", "", Role.from(ChatRole.Assistant))
+                    MessageData(user.userId, helloResponse.second ?: "", "", Role.from(ChatRole.Assistant), 0f)
                 )
-
-                bot.sendMessage(
-                    ChatId.fromId(user.userId),
-                    "${helloResponse.content} \nrunning on: ${user.model.id}"
+                bot.sendMessageWithRetry(
+                    user.userId,
+                    "${helloResponse.second} \nrunning on: ${user.model.id}"
                 )
             }
         }
+
+    private val addUser: SuspendBotAction = { bot: Bot,
+                                              from: TgUser,
+                                              user: User,
+                                              text: String?,
+                                              reply: Message?,
+                                              photo: String?,
+                                              sticker: String?
+        ->
+        withContext(Dispatchers.Default) {
+            if (user.permission < UserPermission.ADMIN) return@withContext
+
+            text?.let {
+                val args = it.split(" ")
+
+                if (args.size - 1 < 2) {
+                    bot.sendMessageWithRetry(
+                        user.userId,
+                        "Not all arguments passed"
+                    )
+                    return@withContext
+                }
+                val id = try {
+                    args[1].toLong()
+                } catch (e: Throwable) {
+                    bot.sendMessageWithRetry(
+                        user.userId,
+                        "Bad argument: id == ${args[1]}"
+                    )
+                    return@withContext
+                }
+
+                val permissionOrdinal = try {
+                    args[2].toInt()
+                } catch (e: Throwable) {
+                    bot.sendMessageWithRetry(
+                        user.userId,
+                        "Bad argument: id == ${args[2]}"
+                    )
+                    return@withContext
+                }
+                val permission = UserPermission.from(permissionOrdinal)
+                chatHistoryAdapter.addUser(User(id, "", permission, Model.GPT_3_5_TURBO))
+                bot.sendMessageWithRetry(
+                    user.userId,
+                    "User added: $id $permission"
+                )
+            }
+        }
+    }
+
+    private fun formatToJson(id: Long, name: String, usage: Float, model: String): String {
+        return """
+        "$id": {
+            "name": "$name",
+            "usage": "${"%.3f".format(usage)}$",
+            "model": "$model"
+        }
+    """.trimIndent()
+    }
+
+    private val listUsers: SuspendBotAction = { bot: Bot,
+                                                from: TgUser,
+                                                user: User,
+                                                text: String?,
+                                                reply: Message?,
+                                                photo: String?,
+                                                sticker: String?
+        ->
+        withContext(Dispatchers.Default) {
+            if (user.permission < UserPermission.ADMIN) return@withContext
+            val users = chatHistoryAdapter.listUsers()
+                .map { formatToJson(it.user.userId, it.user.name, it.usage, it.user.model.name) }
+                .joinToString("\n")
+            bot.sendMessageWithRetry(
+                user.userId,
+                "Users:\n$users"
+            )
+        }
+    }
+    private val deleteUser: SuspendBotAction = { bot: Bot,
+                                                 from: TgUser,
+                                                 user: User,
+                                                 text: String?,
+                                                 reply: Message?,
+                                                 photo: String?,
+                                                 sticker: String?
+        ->
+        withContext(Dispatchers.Default) {
+            if (user.permission < UserPermission.ADMIN) return@withContext
+            text?.let {
+                val args = it.split(" ")
+                if (args.size - 1 < 1) {
+                    bot.sendMessageWithRetry(
+                        user.userId,
+                        "Not all arguments passed"
+                    )
+                    return@withContext
+                }
+                val id = try {
+                    args[1].toLong()
+                } catch (e: Throwable) {
+                    bot.sendMessageWithRetry(
+                        user.userId,
+                        "Bad argument: id == ${args[1]}"
+                    )
+                    return@withContext
+                }
+
+                val deletingUser = chatHistoryAdapter.getUser(id)
+                deletingUser?.let {
+                    val success = chatHistoryAdapter.deleteUser(deletingUser.userId)
+                    if (success) {
+                        bot.sendMessageWithRetry(
+                            user.userId,
+                            "User deleted: ${deletingUser.name} ${deletingUser.userId} ${deletingUser.permission}"
+                        )
+                    } else {
+                        bot.sendMessageWithRetry(
+                            user.userId,
+                            "Could not delete user"
+                        )
+                    }
+
+                } ?: bot.sendMessageWithRetry(
+                    user.userId,
+                    "User not found"
+                )
+
+            }
+        }
+    }
 
     private val conversation: SuspendBotAction =
         { bot: Bot,
@@ -342,18 +684,17 @@ class ConversationModel(
                 val userMessage = text?.trim() ?: ""
 
                 text?.let {
-                    val currentMessage = MessageData(user.userId, it, "", Role.USER)
+                    val currentMessage = MessageData(user.userId, it, "", Role.USER, 0f)
                     chatHistoryAdapter.addMessage(currentMessage)
                 }
-//                val history = chatHistoryAdapter.getMessages(user.userId)
 
                 photo?.let {
-                    val msg = MessageData(user.userId, "", it, Role.USER)
+                    val msg = MessageData(user.userId, "", it, Role.USER, 0f)
                     chatHistoryAdapter.addMessage(msg)
                 }
 
                 sticker?.let {
-                    val msg = MessageData(user.userId, "", it, Role.USER)
+                    val msg = MessageData(user.userId, "", it, Role.USER, 0f)
                     chatHistoryAdapter.addMessage(msg)
                 }
 
@@ -362,13 +703,6 @@ class ConversationModel(
                        |$userMessage
                     """.trimMargin()
                 )
-                BuildConfig.historyChatId?.let {
-                    val result = (user.name) +
-                            (from.username?.let { " username=$it" } ?: "") +
-                            " id=" + user.userId + ":"
-//                    + "\n" + userMessage
-                    bot.sendMessage(ChatId.fromId(it), result)
-                }
 
                 // if reply exists
 //                reply?.let { reply ->
@@ -382,13 +716,40 @@ class ConversationModel(
 //                    bot.sendMessage(ChatId.fromId(from.id), answer.content ?: "")
 //                    return@withContext
 //                }
-                val history = chatHistoryAdapter.getMessages(bot, user.userId)
 
-                val answer = requestChatPrediction(history, user)
-                answer.content?.let {
-                    chatHistoryAdapter.addMessage(MessageData(user.userId, it, "", Role.ASSISTANT))
-                } ?: bot.sendMessage(ChatId.fromId(user.userId), "No response...", parseMode = ParseMode.MARKDOWN)
-                bot.sendMessage(ChatId.fromId(user.userId), answer.content ?: "", parseMode = ParseMode.MARKDOWN)
+//                    + "\n" + userMessage
+                if (text == null && (photo != null || sticker != null) && !user.model.imgModel) {
+
+
+                    bot.sendMessageWithRetry(
+                        user.userId,
+                        "System: Images not supported in this model"
+                    )
+
+                    return@withContext
+                }
+                val history = chatHistoryAdapter.getMessages(user.userId)
+                val answer = requestChatPrediction(bot, history, user)
+                val usage =
+                    answer.first.let { evaluatePrice(it?.promptTokens ?: 0, it?.completionTokens ?: 0, user.model) }
+                val messageData = answer.second?.let { content ->
+                    MessageData(user.userId, content, "", Role.ASSISTANT, usage)
+                } ?: MessageData(
+                    user.userId,
+                    if (answer.first == null) "Server response timeout..." else "No response from server...",
+                    "",
+                    Role.SYSTEM,
+                    0f
+                )
+
+                chatHistoryAdapter.addMessage(messageData)
+                println("logging response: ${messageData.message.substring(0, 10)}...")
+
+                bot.logInTg("${user.name} ${from.username?.let { " username=$it" } ?: ""} usage=${
+                    df.format(chatHistoryAdapter.getUsage(user.userId))
+                }$ id=${user.userId}L ")
+                println("sending response: ${messageData.message}...")
+                bot.sendMessageWithRetry(user.userId, messageData.message)
             }
         }
 }
