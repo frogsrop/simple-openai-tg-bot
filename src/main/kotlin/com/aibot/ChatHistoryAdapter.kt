@@ -11,7 +11,11 @@ class ChatHistoryAdapter(
     private val usersRepository: UsersRepository,
     private val messagesRepository: MessagesRepository
 ) {
-    suspend fun getMessages(userId: Long): List<MessageData> {
+    fun getAllMessages(userId: Long): List<MessageData> {
+        val messages = messagesRepository.getMessages(userId)
+        return messages
+    }
+    fun getMessages(userId: Long): List<MessageData> {
         val messages = messagesRepository.getMessages(userId)
         return messages
     }

@@ -10,4 +10,5 @@ object Messages : Table<Nothing>("messages") {
     val resource = text("resource")
     val role = text("role")
     val usage = float("usage")
+    val deleted = boolean("deleted")
 }

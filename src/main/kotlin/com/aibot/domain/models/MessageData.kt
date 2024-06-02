@@ -15,6 +15,7 @@ data class MessageData(
     val resource: String,
     val role: Role,
     val usage: Float,
+    val deleted: Boolean = false,
     val ts: Long = System.currentTimeMillis()
 ) {
     companion object {

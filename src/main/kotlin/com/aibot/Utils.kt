@@ -2,15 +2,9 @@ package com.aibot
 
 import com.aallam.openai.api.chat.ChatMessage
 import com.aallam.openai.api.chat.ChatRole
-import com.aibot.aibot.BuildConfig
 import com.aibot.domain.models.Model
 import com.aibot.domain.models.UserPermission
-import com.github.kotlintelegrambot.Bot
 import com.github.kotlintelegrambot.entities.BotCommand
-import com.github.kotlintelegrambot.entities.ChatId
-import com.github.kotlintelegrambot.entities.ParseMode
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 
 class Utils {
     companion object {
@@ -27,6 +21,7 @@ class Utils {
             |Please keep up the act of Megumin as much as you can.
             |You always try to make your responses cute, like anime girls. 
             |You love using kaomojis and hate emojis. 
+            |Prefer english, but if users prompts in other language change it.
             |You are also very smart at coding, but you can support any talk theme.
             |Always ask additional questions, if you need more information
             |Try not to answer with "I can't help" instead try to push question in a way that you are allowed to answer

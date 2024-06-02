@@ -7,7 +7,7 @@ import org.ktorm.database.Database
 import org.ktorm.dsl.*
 
 interface MessagesRepository {
-    fun selectMessages(userId: Long): List<MessageData>
+    fun getAllMessages(userId: Long): List<MessageData>
     fun getMessages(userId: Long): List<MessageData>
     fun addMessage(messageData: MessageData)
     fun deleteMessages(userId: Long)
@@ -30,14 +30,15 @@ class KtormMessagesRepository(
                         message TEXT,
                         resource TEXT,
                         role TEXT,
-                        usage FLOAT
+                        usage FLOAT,
+                        deleted BOOLEAN DEFAULT FALSE
                     )"""
                 )
             }
         }
     }
 
-    override fun selectMessages(userId: Long): List<MessageData> {
+    fun selectMessages(userId: Long, deleted: Boolean = false): List<MessageData> {
         return database.from(Messages)
             .select(
                 Messages.messageId,
@@ -46,9 +47,10 @@ class KtormMessagesRepository(
                 Messages.message,
                 Messages.resource,
                 Messages.role,
-                Messages.usage
+                Messages.usage,
+                Messages.deleted
             )
-            .where(Messages.userId.eq(userId))
+            .where(Messages.userId.eq(userId).and(Messages.deleted.eq(deleted)))
             .map { row ->
                 MessageData(
                     ts = row[Messages.ts]!!,
@@ -56,15 +58,19 @@ class KtormMessagesRepository(
                     message = row[Messages.message]!!,
                     resource = row[Messages.resource]!!,
                     role = Role.valueOf(row[Messages.role]!!),
-                    usage = row[Messages.usage]!!
+                    usage = row[Messages.usage]!!,
+                    deleted = row[Messages.deleted]!!
                 )
             }
             .toList()
     }
 
+    override fun getAllMessages(userId: Long): List<MessageData> {
+        return selectMessages(userId, true).sortedBy { it.ts }
+    }
+
     override fun getMessages(userId: Long): List<MessageData> {
-        val chatMessages = selectMessages(userId)
-        return chatMessages.sortedBy { it.ts }
+        return selectMessages(userId).sortedBy { it.ts }
     }
 
     override fun addMessage(messageData: MessageData) {
@@ -75,12 +81,14 @@ class KtormMessagesRepository(
             set(it.resource, messageData.resource)
             set(it.role, messageData.role.name)
             set(it.usage, messageData.usage)
+            set(it.deleted, messageData.deleted)
         }
     }
 
     override fun deleteMessages(userId: Long) {
-        database.delete(Messages) {
-            it.userId eq userId
+        database.update(Messages) {
+            set(it.deleted, true)
+            where { it.userId eq userId }
         }
     }
 

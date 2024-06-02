@@ -45,8 +45,8 @@ import com.github.kotlintelegrambot.entities.User as TgUser
 class ConversationModel(
     private val chatHistoryAdapter: ChatHistoryAdapter
 ) {
-    private val botContext = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val sendMessageContext = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+    private val mainContext = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+    private val botContext = CoroutineScope(SupervisorJob() + mainContext)
 
     private val openAI = OpenAI(
         config = OpenAIConfig(
@@ -94,7 +94,13 @@ class ConversationModel(
 
         return stringBuilder.toString()
     }
-    suspend fun Bot.sendMessageWithRetry(chatId: Long, message: String, maxRetries: Int = 5, parseMode: ParseMode? = ParseMode.HTML) {
+
+    suspend fun Bot.sendMessageWithRetry(
+        chatId: Long,
+        message: String,
+        maxRetries: Int = 5,
+        parseMode: ParseMode? = ParseMode.HTML
+    ) {
         var parseMode = parseMode
         var attempts = 0
         var success = false
@@ -104,7 +110,7 @@ class ConversationModel(
         println("sending: \"$message\"")
         while (attempts < maxRetries && !success) {
             try {
-                withContext(sendMessageContext) {
+                withContext(mainContext) {
                     val response = sendMessage(ChatId.fromId(chatId), message, parseMode = parseMode)
                     success = response.isSuccess
                     response.fold(
@@ -135,14 +141,17 @@ class ConversationModel(
                     parseMode = null
                     message = originalMessage
                 }
+
                 (maxRetries - 2) -> {
                     message = escapeMarkdown(originalMessage)
                     parseMode = ParseMode.MARKDOWN
                 }
+
                 (maxRetries - 3) -> {
                     message = escapeMarkdown(originalMessage)
                     parseMode = ParseMode.MARKDOWN_V2
                 }
+
                 (maxRetries - 4) -> {
                     message = originalMessage
                     parseMode = ParseMode.MARKDOWN
@@ -237,6 +246,24 @@ class ConversationModel(
     }
 
     fun run() {
+        botContext.launch {
+            while (true) {
+                val users = chatHistoryAdapter.listUsers()
+                for (userInfo in users) {
+                    val messages = chatHistoryAdapter.getAllMessages(userInfo.user.userId)
+                    if (messages.isNotEmpty()) {
+                        val last = messages.last()
+                        val dtH = (System.currentTimeMillis() - last.ts) / 1000f / 60f / 60f
+                        if (dtH >= 1) {
+                            chatHistoryAdapter.deleteMessages(userInfo.user.userId)
+                        }
+                    }
+                }
+                delay(5 * 60 * 1000)
+//                delay(1000)
+            }
+
+        }
         adminUsers.forEach {
             if (!chatHistoryAdapter.hasUser(it.userId)) {
                 chatHistoryAdapter.addUser(it)
@@ -401,7 +428,7 @@ class ConversationModel(
             val content = completion.choices.firstNotNullOf { it.message }.content
             println("generated response: ${content?.substring(0, 10)}...")
             completion.usage to content
-        } catch (e: OpenAITimeoutException) {
+        } catch (e: Throwable) {
             println("failed with response")
             null to null
         }
@@ -456,6 +483,11 @@ class ConversationModel(
             )
         }
     }
+
+    private fun getTextForModel(model: Model): String {
+        return model.id + if (model.imgModel) " with imgs " else " "
+    }
+
     private val changeModel: SuspendBotAction = { bot: Bot,
                                                   from: TgUser,
                                                   user: User,
@@ -470,20 +502,20 @@ class ConversationModel(
             val ids = Model.entries.map { it.id }
             if (content.isEmpty() || content !in ids) {
                 val gpt_3_5 = InlineKeyboardButton.CallbackData(
-                    text = Model.GPT_3_5_TURBO.id,
+                    text = "${getTextForModel(Model.GPT_3_5_TURBO)}price 1x",
                     callbackData = "MODEL_${Model.GPT_3_5_TURBO.ordinal}"
                 )
                 val gpt_4o = InlineKeyboardButton.CallbackData(
-                    text = Model.GPT_4O.id,
+                    text = "${getTextForModel(Model.GPT_4O)}price 10x",
                     callbackData = "MODEL_${Model.GPT_4O.ordinal}"
                 )
                 val gpt_4 = InlineKeyboardButton.CallbackData(
-                    text = Model.GPT_4.id,
+                    text = "${getTextForModel(Model.GPT_4)}price 60x",
                     callbackData = "MODEL_${Model.GPT_4.ordinal}"
                 )
                 val gpt_4_turbo =
                     InlineKeyboardButton.CallbackData(
-                        text = Model.GPT_4_TURBO.id,
+                        text = "${getTextForModel(Model.GPT_4_TURBO)}price 20x",
                         callbackData = "MODEL_${Model.GPT_4_TURBO.ordinal}"
                     )
                 val markup = InlineKeyboardMarkup.create(
@@ -493,7 +525,11 @@ class ConversationModel(
                     )
                 )
 
-                bot.sendMessage(ChatId.fromId(user.userId), text = "Select model", replyMarkup = markup)
+                bot.sendMessage(
+                    ChatId.fromId(user.userId),
+                    text = "Select model (prefer 3.5 or 4o)",
+                    replyMarkup = markup
+                )
 
                 return@withContext
             }
@@ -590,10 +626,11 @@ class ConversationModel(
         }
     }
 
-    private fun formatToJson(id: Long, name: String, usage: Float, model: String): String {
+    private fun formatToJson(id: Long, name: String, usage: Float, model: String, permission: String): String {
         return """
         "$id": {
             "name": "$name",
+            "permission": "$permission"
             "usage": "${"%.3f".format(usage)}$",
             "model": "$model"
         }
@@ -611,7 +648,15 @@ class ConversationModel(
         withContext(Dispatchers.Default) {
             if (user.permission < UserPermission.ADMIN) return@withContext
             val users = chatHistoryAdapter.listUsers()
-                .map { formatToJson(it.user.userId, it.user.name, it.usage, it.user.model.name) }
+                .map {
+                    formatToJson(
+                        it.user.userId,
+                        it.user.name,
+                        it.usage,
+                        it.user.model.name,
+                        it.user.permission.name
+                    )
+                }
                 .joinToString("\n")
             bot.sendMessageWithRetry(
                 user.userId,
@@ -694,6 +739,14 @@ class ConversationModel(
                 }
 
                 sticker?.let {
+                    val config = MessageData(
+                        user.userId,
+                        "refer to next image as reaction, don't try to react to it, imagine that user reacted with that picture to previous message",
+                        "",
+                        Role.SYSTEM,
+                        0f
+                    )
+                    chatHistoryAdapter.addMessage(config)
                     val msg = MessageData(user.userId, "", it, Role.USER, 0f)
                     chatHistoryAdapter.addMessage(msg)
                 }
@@ -745,9 +798,9 @@ class ConversationModel(
                 chatHistoryAdapter.addMessage(messageData)
                 println("logging response: ${messageData.message.substring(0, 10)}...")
 
-                bot.logInTg("${user.name} ${from.username?.let { " username=$it" } ?: ""} usage=${
+                bot.logInTg("${user.name} ${from.username?.let { " username=$it" } ?: ""} model=${user.model} usage=${
                     df.format(chatHistoryAdapter.getUsage(user.userId))
-                }$ id=${user.userId}L ")
+                }$ model=${user.model} id=${user.userId}L ")
                 println("sending response: ${messageData.message}...")
                 bot.sendMessageWithRetry(user.userId, messageData.message)
             }
