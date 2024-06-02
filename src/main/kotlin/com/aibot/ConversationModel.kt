@@ -626,13 +626,20 @@ class ConversationModel(
         }
     }
 
-    private fun formatToJson(id: Long, name: String, usage: Float, model: String, permission: String): String {
+    private fun formatToJson(
+        id: Long,
+        name: String,
+        usage: Float,
+        model: String,
+        permission: String,
+        username: String? = null
+    ): String {
         return """
-        "$id": {
-            "name": "$name",
-            "permission": "$permission"
-            "usage": "${"%.3f".format(usage)}$",
-            "model": "$model"
+        $id: {
+            name: "$name",
+            permission: $permission
+            usage: ${"%.3f".format(usage)}$,
+            model: $model${username?.let { "\n            username: $username" } ?: ""}
         }
     """.trimIndent()
     }
@@ -727,7 +734,7 @@ class ConversationModel(
           sticker: String? ->
             withContext(Dispatchers.Default) {
                 val userMessage = text?.trim() ?: ""
-
+                chatHistoryAdapter.addUser(user.copy(name = cleanName(from.firstName, from.username)))
                 text?.let {
                     val currentMessage = MessageData(user.userId, it, "", Role.USER, 0f)
                     chatHistoryAdapter.addMessage(currentMessage)
@@ -798,9 +805,19 @@ class ConversationModel(
                 chatHistoryAdapter.addMessage(messageData)
                 println("logging response: ${messageData.message.substring(0, 10)}...")
 
-                bot.logInTg("${user.name} ${from.username?.let { " username=$it" } ?: ""} model=${user.model} usage=${
-                    df.format(chatHistoryAdapter.getUsage(user.userId))
-                }$ model=${user.model} id=${user.userId}L ")
+                bot.logInTg(
+                    formatToJson(
+                        user.userId,
+                        user.name,
+                        chatHistoryAdapter.getUsage(user.userId),
+                        user.model.name,
+                        user.permission.name,
+                        from.username
+                    )
+                )
+//                "${user.name}  model=${user.model} usage=${
+//                    df.format(chatHistoryAdapter.getUsage(user.userId))
+//                }$ model=${user.model} id=${user.userId}L "
                 println("sending response: ${messageData.message}...")
                 bot.sendMessageWithRetry(user.userId, messageData.message)
             }
