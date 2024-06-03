@@ -5,7 +5,7 @@ import com.aibot.repositories.KtormUsersRepository
 import org.ktorm.database.Database
 
 fun main() {
-    val database = Database.connect("jdbc:sqlite:..\\..\\sample.db")
+    val database = Database.connect("jdbc:sqlite:sample.db")
     val usersRepository = KtormUsersRepository(database)
     val messagesRepository = KtormMessagesRepository(database)
 
