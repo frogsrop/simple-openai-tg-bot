@@ -84,12 +84,14 @@ class KtormUsersRepository(
                 Users.permission,
                 Users.model
             ).map { row ->
-                User(
+                val user = User(
                     userId = row[Users.userId]!!,
                     name = row[Users.name]!!,
                     permission = UserPermission.from(row[Users.permission]!!)!!,
-                    model = Model.from(row[Users.model]!!)!!
+                    model = try { Model.from(row[Users.model]!!)!! } catch (e: NullPointerException) { Model.GPT_3_5_TURBO }
                 )
+                addUser(user)
+                user
             }.toList()
     }
 }
