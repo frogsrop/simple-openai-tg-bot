@@ -24,4 +24,5 @@ gradle.properties
 history.txt
 .DS_Store
 /sample.db
-Deploy.kt
+src/main/kotlin/com/aibot/Deploy.kt
+.kotlin/*

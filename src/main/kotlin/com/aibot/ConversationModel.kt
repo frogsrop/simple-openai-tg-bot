@@ -502,32 +502,32 @@ class ConversationModel(
             val ids = Model.entries.map { it.id }
             if (content.isEmpty() || content !in ids) {
                 val gpt_3_5 = InlineKeyboardButton.CallbackData(
-                    text = "${getTextForModel(Model.GPT_3_5_TURBO)}price 1x",
+                    text = "${Model.GPT_3_5_TURBO.id}: text only model price 1x",
                     callbackData = "MODEL_${Model.GPT_3_5_TURBO.ordinal}"
                 )
                 val gpt_4o = InlineKeyboardButton.CallbackData(
-                    text = "${getTextForModel(Model.GPT_4O)}price 10x",
+                    text = "${Model.GPT_4O.id}: text and image model price 10x",
                     callbackData = "MODEL_${Model.GPT_4O.ordinal}"
                 )
-                val gpt_4 = InlineKeyboardButton.CallbackData(
-                    text = "${getTextForModel(Model.GPT_4)}price 60x",
-                    callbackData = "MODEL_${Model.GPT_4.ordinal}"
-                )
-                val gpt_4_turbo =
-                    InlineKeyboardButton.CallbackData(
-                        text = "${getTextForModel(Model.GPT_4_TURBO)}price 20x",
-                        callbackData = "MODEL_${Model.GPT_4_TURBO.ordinal}"
-                    )
+//                val gpt_4 = InlineKeyboardButton.CallbackData(
+//                    text = "${getTextForModel(Model.GPT_4)}price 60x",
+//                    callbackData = "MODEL_${Model.GPT_4.ordinal}"
+//                )
+//                val gpt_4_turbo =
+//                    InlineKeyboardButton.CallbackData(
+//                        text = "${getTextForModel(Model.GPT_4_TURBO)}price 20x",
+//                        callbackData = "MODEL_${Model.GPT_4_TURBO.ordinal}"
+//                    )
                 val markup = InlineKeyboardMarkup.create(
                     listOf(
-                        listOf(gpt_3_5, gpt_4o),
-                        listOf(gpt_4, gpt_4_turbo)
+                        listOf(gpt_3_5),
+                        listOf(gpt_4o)
                     )
                 )
 
                 bot.sendMessage(
                     ChatId.fromId(user.userId),
-                    text = "Select model (prefer 3.5 or 4o)",
+                    text = "Select model",
                     replyMarkup = markup
                 )
 
@@ -734,7 +734,8 @@ class ConversationModel(
           sticker: String? ->
             withContext(Dispatchers.Default) {
                 val userMessage = text?.trim() ?: ""
-                chatHistoryAdapter.addUser(user.copy(name = cleanName(from.firstName, from.username)))
+                val user = user.copy(name = cleanName(from.firstName, from.username))
+                chatHistoryAdapter.addUser(user)
                 text?.let {
                     val currentMessage = MessageData(user.userId, it, "", Role.USER, 0f)
                     chatHistoryAdapter.addMessage(currentMessage)
