@@ -1,6 +1,7 @@
 package com.aibot
 
 import com.aallam.openai.api.chat.ChatCompletionRequest
+import com.aallam.openai.api.chat.ChatMessage
 import com.aallam.openai.api.chat.ChatRole
 import com.aallam.openai.api.core.Usage
 import com.aallam.openai.api.exception.OpenAITimeoutException
@@ -183,7 +184,7 @@ class ConversationModel(
                     message.from?.let { from ->
                         val user = chatHistoryAdapter.getUser(from.id)
                         if (user == null) {
-                            bot.logInTg("/start name:\"${from.firstName} ${from.lastName}\" username:\"${(from.username?.let { " username=$it" } ?: "")}\" id=\"${from.id}L\"")
+                            bot.logInTg("/start name:\"${from.firstName} ${from.lastName}\" username:\"${(from.username?.let { " username=$it" } ?: "")}\" id=\"${from.id}L\"\n\"${message.text}\" ${message.photo?.first()?.fileId ?: ""}")
                             bot.sendMessageWithRetry(from.id, "Contact Yanis")
                             return@let
                         }
@@ -407,7 +408,7 @@ class ConversationModel(
         messages: List<MessageData>,
         user: User,
         short: Boolean = false
-    ): Pair<Usage?, String?> {
+    ): Pair<Usage?, String> {
         val toSendMessages = messages.filter {
             val isPremium = user.permission >= UserPermission.PREMIUM
             val hasResource = it.resource.isNotEmpty()
@@ -427,10 +428,11 @@ class ConversationModel(
             val completion = openAI.chatCompletion(completionRequest)
             val content = completion.choices.firstNotNullOf { it.message }.content
             println("generated response: ${content?.substring(0, 10)}...")
-            completion.usage to content
+            completion.usage!! to content!!
         } catch (e: Throwable) {
+            bot.logInTg(e.message ?: "Unknown error")
             println("failed with response")
-            null to null
+            null to (e.message ?: "Filed response")
         }
     }
 
@@ -793,11 +795,11 @@ class ConversationModel(
                 val answer = requestChatPrediction(bot, history, user)
                 val usage =
                     answer.first.let { evaluatePrice(it?.promptTokens ?: 0, it?.completionTokens ?: 0, user.model) }
-                val messageData = answer.second?.let { content ->
-                    MessageData(user.userId, content, "", Role.ASSISTANT, usage)
+                val messageData = answer.first?.let {
+                    MessageData(user.userId, answer.second, "", Role.ASSISTANT, usage)
                 } ?: MessageData(
                     user.userId,
-                    if (answer.first == null) "Server response timeout..." else "No response from server...",
+                    answer.second,
                     "",
                     Role.SYSTEM,
                     0f
